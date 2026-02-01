@@ -1,14 +1,17 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from .db import init_db
 from .routers import items, lists, templates, users
 
-app = FastAPI(title="Shoplist API", version="1.0.0")
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await init_db()
+    yield
+
+
+app = FastAPI(title="Shoplist API", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/", tags=["meta"])
