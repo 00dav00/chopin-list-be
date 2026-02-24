@@ -26,6 +26,7 @@ async def get_current_user(
             settings.google_client_id,
         )
     except Exception as exc:
+        print(f"Error verifying Google ID token: {exc}")
         raise HTTPException(status_code=401, detail="Invalid Google ID token.") from exc
 
     issuer = id_info.get("iss")
