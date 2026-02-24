@@ -8,8 +8,8 @@ async def create_list(client, name="List"):
     return response.json()
 
 
-async def create_item(client, list_id, name="Milk", qty=1, unit="box"):
-    payload = {"name": name, "qty": qty, "unit": unit}
+async def create_item(client, list_id, name="Milk", qty=1):
+    payload = {"name": name, "qty": qty}
     response = await client.post(f"/lists/{list_id}/items", json=payload)
     assert response.status_code == 201
     return response.json()
@@ -27,7 +27,6 @@ async def test_update_item_partial_fields(client):
     data = response.json()
     assert data["name"] == "Oat Milk"
     assert data["qty"] == created_item["qty"]
-    assert data["unit"] == created_item["unit"]
 
 
 @pytest.mark.asyncio

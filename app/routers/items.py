@@ -31,8 +31,6 @@ async def update_item(
         updates["name"] = payload.name
     if "qty" in fields:
         updates["qty"] = payload.qty
-    if "unit" in fields:
-        updates["unit"] = payload.unit
     if "sort_order" in fields:
         updates["sort_order"] = payload.sort_order
     if "purchased" in fields:

@@ -74,7 +74,6 @@ async def create_template(
                 "template_id": template_id,
                 "name": item.name,
                 "qty": item.qty,
-                "unit": item.unit,
                 "sort_order": item.sort_order,
                 "created_at": now,
                 "updated_at": now,
@@ -173,7 +172,6 @@ async def create_template_item(
         "template_id": template_id,
         "name": payload.name,
         "qty": payload.qty,
-        "unit": payload.unit,
         "sort_order": payload.sort_order,
         "created_at": now,
         "updated_at": now,
@@ -199,8 +197,6 @@ async def update_template_item(
         updates["name"] = payload.name
     if "qty" in fields:
         updates["qty"] = payload.qty
-    if "unit" in fields:
-        updates["unit"] = payload.unit
     if "sort_order" in fields:
         updates["sort_order"] = payload.sort_order
     if not updates:
@@ -279,7 +275,6 @@ async def create_list_from_template(
                     "list_id": list_id,
                     "name": item.get("name"),
                     "qty": item.get("qty"),
-                    "unit": item.get("unit"),
                     "sort_order": item.get("sort_order", 0),
                     "purchased": False,
                     "purchased_at": None,

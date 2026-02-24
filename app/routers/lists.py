@@ -112,7 +112,6 @@ async def create_item(
         "list_id": list_id,
         "name": payload.name,
         "qty": payload.qty,
-        "unit": payload.unit,
         "purchased": False,
         "purchased_at": None,
         "sort_order": payload.sort_order,

@@ -33,7 +33,6 @@ Notes:
 - Reference fields (`user_id`, `list_id`, `template_id`) are stored as strings, not `ObjectId`.
 - Text validation (API layer):
   - `name`: `1..200` characters
-  - `unit`: max `50` characters
 
 ## Collection: `users`
 
@@ -79,7 +78,6 @@ Fields:
 - `list_id`: `string` (parent list id)
 - `name`: `string` (required)
 - `qty`: `number | null`
-- `unit`: `string | null`
 - `purchased`: `bool` (default `false`)
 - `purchased_at`: `datetime | null` (set when purchased)
 - `sort_order`: `int` (default `0`)
@@ -118,7 +116,6 @@ Fields:
 - `template_id`: `string` (parent template id)
 - `name`: `string` (required)
 - `qty`: `number | null`
-- `unit`: `string | null`
 - `sort_order`: `int` (default `0`)
 - `created_at`: `datetime`
 - `updated_at`: `datetime`
