@@ -39,3 +39,7 @@ Pass the Google ID token in the `Authorization` header:
 ```
 Authorization: Bearer <google-id-token>
 ```
+
+## Data Schema
+
+See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.
