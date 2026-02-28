@@ -3,10 +3,13 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       MONGO_URI: mongodb://mongo:27017
       MONGO_DB: shoplist
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      CHOPIN_LIST_FE_URL: ${CHOPIN_LIST_FE_URL}
     depends_on:
       - mongo
 

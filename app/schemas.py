@@ -38,14 +38,12 @@ class ListOut(BaseSchema):
 class ItemCreate(BaseSchema):
     name: str = Field(min_length=1, max_length=200)
     qty: Optional[float] = None
-    unit: Optional[str] = Field(default=None, max_length=50)
     sort_order: int = 0
 
 
 class ItemUpdate(BaseSchema):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     qty: Optional[float] = None
-    unit: Optional[str] = Field(default=None, max_length=50)
     sort_order: Optional[int] = None
     purchased: Optional[bool] = None
 
@@ -56,7 +54,6 @@ class ItemOut(BaseSchema):
     list_id: str
     name: str
     qty: Optional[float] = None
-    unit: Optional[str] = None
     purchased: bool = False
     purchased_at: Optional[datetime] = None
     sort_order: int = 0
@@ -64,17 +61,19 @@ class ItemOut(BaseSchema):
     updated_at: datetime
 
 
+class ReorderListItems(BaseSchema):
+    item_ids: list[str]
+
+
 class TemplateItemCreate(BaseSchema):
     name: str = Field(min_length=1, max_length=200)
     qty: Optional[float] = None
-    unit: Optional[str] = Field(default=None, max_length=50)
     sort_order: int = 0
 
 
 class TemplateItemUpdate(BaseSchema):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     qty: Optional[float] = None
-    unit: Optional[str] = Field(default=None, max_length=50)
     sort_order: Optional[int] = None
 
 
@@ -84,7 +83,6 @@ class TemplateItemOut(BaseSchema):
     template_id: str
     name: str
     qty: Optional[float] = None
-    unit: Optional[str] = None
     sort_order: int = 0
     created_at: datetime
     updated_at: datetime

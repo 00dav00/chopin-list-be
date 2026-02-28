@@ -117,3 +117,54 @@ async def test_create_item_in_list(client):
     item = await create_item(client, created["id"], name="Eggs", sort_order=3)
     assert item["name"] == "Eggs"
     assert item["purchased"] is False
+
+
+@pytest.mark.asyncio
+async def test_reorder_items_updates_sort_order_by_position(client, db):
+    created = await create_list(client, name="Reorder")
+    first = await create_item(client, created["id"], name="First", sort_order=10)
+    second = await create_item(client, created["id"], name="Second", sort_order=20)
+    third = await create_item(client, created["id"], name="Third", sort_order=30)
+
+    response = await client.post(
+        f"/lists/{created['id']}/items/reorder",
+        json={"item_ids": [third["id"], first["id"], second["id"]]},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data] == [third["id"], first["id"], second["id"]]
+    assert [item["sort_order"] for item in data] == [0, 1, 2]
+
+    stored = await db.items.find({"list_id": created["id"]}).sort("sort_order", 1).to_list(
+        length=None
+    )
+    assert [str(item["_id"]) for item in stored] == [third["id"], first["id"], second["id"]]
+    assert [item["sort_order"] for item in stored] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_reorder_items_requires_complete_item_id_list(client):
+    created = await create_list(client, name="Reorder")
+    first = await create_item(client, created["id"], name="First", sort_order=1)
+    await create_item(client, created["id"], name="Second", sort_order=2)
+
+    response = await client.post(
+        f"/lists/{created['id']}/items/reorder",
+        json={"item_ids": [first["id"]]},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Item ids must include every item in the list exactly once."
+
+
+@pytest.mark.asyncio
+async def test_reorder_items_rejects_duplicate_ids(client):
+    created = await create_list(client, name="Reorder")
+    first = await create_item(client, created["id"], name="First", sort_order=1)
+    second = await create_item(client, created["id"], name="Second", sort_order=2)
+
+    response = await client.post(
+        f"/lists/{created['id']}/items/reorder",
+        json={"item_ids": [first["id"], first["id"], second["id"]]},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Item ids must not contain duplicates."

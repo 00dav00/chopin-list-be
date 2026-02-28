@@ -4,9 +4,10 @@ FastAPI + MongoDB backend that authenticates every request with a Google ID toke
 
 ## Environment
 
-- `MONGO_URI` (default `mongodb://localhost:27017`)
-- `MONGO_DB` (default `shoplist`)
+- `MONGO_URI` (required)
+- `MONGO_DB` (required)
 - `GOOGLE_CLIENT_ID` (required)
+- `CHOPIN_LIST_FE_URL` (required)
 
 ## Run
 
@@ -39,3 +40,7 @@ Pass the Google ID token in the `Authorization` header:
 ```
 Authorization: Bearer <google-id-token>
 ```
+
+## Data Schema
+
+See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.

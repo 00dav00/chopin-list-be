@@ -1,8 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pymongo import UpdateOne
 
 from ..auth import get_current_user
 from ..db import get_db
-from ..schemas import ItemCreate, ItemOut, ListCreate, ListOut, ListUpdate
+from ..schemas import (
+    ItemCreate,
+    ItemOut,
+    ListCreate,
+    ListOut,
+    ListUpdate,
+    ReorderListItems,
+)
 from ..utils import serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/lists", tags=["lists"])
@@ -112,7 +120,6 @@ async def create_item(
         "list_id": list_id,
         "name": payload.name,
         "qty": payload.qty,
-        "unit": payload.unit,
         "purchased": False,
         "purchased_at": None,
         "sort_order": payload.sort_order,
@@ -122,3 +129,54 @@ async def create_item(
     result = await db.items.insert_one(doc)
     doc["_id"] = result.inserted_id
     return serialize_doc(doc)
+
+
+@router.post("/{list_id}/items/reorder", response_model=list[ItemOut])
+async def reorder_items(
+    list_id: str,
+    payload: ReorderListItems,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    await _get_list_or_404(db, list_id, current_user["id"])
+    item_ids = payload.item_ids
+    if len(item_ids) != len(set(item_ids)):
+        raise HTTPException(
+            status_code=400, detail="Item ids must not contain duplicates."
+        )
+
+    existing_items = await db.items.find(
+        {"list_id": list_id, "user_id": current_user["id"]}
+    ).to_list(length=None)
+    existing_item_ids = {str(item["_id"]) for item in existing_items}
+    if set(item_ids) != existing_item_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Item ids must include every item in the list exactly once.",
+        )
+
+    now = utcnow()
+    operations = []
+    for sort_order, item_id in enumerate(item_ids):
+        operations.append(
+            UpdateOne(
+                {
+                    "_id": to_object_id(item_id, "item_id"),
+                    "list_id": list_id,
+                    "user_id": current_user["id"],
+                },
+                {"$set": {"sort_order": sort_order, "updated_at": now}},
+            )
+        )
+    if operations:
+        await db.items.bulk_write(operations)
+    await db.lists.update_one(
+        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
+        {"$set": {"updated_at": now}},
+    )
+
+    cursor = db.items.find({"list_id": list_id, "user_id": current_user["id"]}).sort(
+        [("sort_order", 1), ("created_at", 1)]
+    )
+    docs = await cursor.to_list(length=None)
+    return [serialize_doc(doc) for doc in docs]
