@@ -61,6 +61,10 @@ class ItemOut(BaseSchema):
     updated_at: datetime
 
 
+class ReorderListItems(BaseSchema):
+    item_ids: list[str]
+
+
 class TemplateItemCreate(BaseSchema):
     name: str = Field(min_length=1, max_length=200)
     qty: Optional[float] = None

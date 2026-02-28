@@ -1,11 +1,18 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    mongo_uri: str = "mongodb://localhost:27017"
-    mongo_db: str = "shoplist"
+    mongo_uri: str = Field(
+        validation_alias="MONGO_URI",
+    )
+    mongo_db: str = Field(
+        validation_alias="MONGO_DB",
+    )
     google_client_id: str
-    chopin_list_fe_url: str = "http://localhost:5173"
+    chopin_list_fe_url: str = Field(
+        validation_alias="CHOPIN_LIST_FE_URL",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
