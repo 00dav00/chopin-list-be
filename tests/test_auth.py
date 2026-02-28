@@ -49,7 +49,7 @@ async def test_invalid_issuer_returns_401(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_current_user_upserts_and_returns_user(db, monkeypatch):
+async def test_get_current_user_creates_user_on_hold_and_returns_403(db, monkeypatch):
     def fake_verify(*args, **kwargs):
         return {
             "sub": "sub123",
@@ -61,12 +61,65 @@ async def test_get_current_user_upserts_and_returns_user(db, monkeypatch):
 
     monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
 
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Account pending approval."
+
+    stored = await db.users.find_one({"google_sub": "sub123"})
+    assert stored is not None
+    assert stored["approved"] is False
+    assert stored["email"] == "user@example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_returns_approved_user(db, monkeypatch):
+    def fake_verify(*args, **kwargs):
+        return {
+            "sub": "sub123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.png",
+            "iss": "accounts.google.com",
+        }
+
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
+
+    await db.users.insert_one(
+        {
+            "google_sub": "sub123",
+            "approved": True,
+            "email": "old@example.com",
+        }
+    )
     user = await auth.get_current_user(authorization="Bearer valid", db=db)
 
     assert user["email"] == "user@example.com"
     assert user["name"] == "Test User"
     assert "id" in user
 
-    stored = await db.users.find_one({"google_sub": "sub123"})
-    assert stored is not None
-    assert stored["email"] == "user@example.com"
+
+@pytest.mark.asyncio
+async def test_get_current_user_rejects_unapproved_existing_user(db, monkeypatch):
+    def fake_verify(*args, **kwargs):
+        return {
+            "sub": "sub123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.png",
+            "iss": "accounts.google.com",
+        }
+
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
+
+    await db.users.insert_one(
+        {
+            "google_sub": "sub123",
+            "approved": False,
+            "email": "old@example.com",
+        }
+    )
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Account pending approval."

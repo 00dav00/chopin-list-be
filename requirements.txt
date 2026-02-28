@@ -5,3 +5,4 @@ pydantic>=2.6
 pydantic-settings>=2.2
 google-auth>=2.25
 requests>=2.31
+typer>=0.12

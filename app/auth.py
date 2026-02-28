@@ -43,6 +43,7 @@ async def get_current_user(
         },
         "$setOnInsert": {
             "google_sub": id_info.get("sub"),
+            "approved": False,
             "created_at": now,
         },
     }
@@ -53,5 +54,7 @@ async def get_current_user(
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
+    if not user_doc.get("approved", True):
+        raise HTTPException(status_code=403, detail="Account pending approval.")
 
     return serialize_doc(user_doc)

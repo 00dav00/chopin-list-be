@@ -37,11 +37,13 @@ Notes:
 ## Collection: `users`
 
 Created/updated during Google ID token auth.
+New users are created on hold and must be manually approved.
 
 Fields:
 
 - `_id`: `ObjectId` (serialized as `id`)
 - `google_sub`: `string` (unique index)
+- `approved`: `bool` (new users default to `false`)
 - `email`: `string | null`
 - `name`: `string | null`
 - `avatar_url`: `string | null`

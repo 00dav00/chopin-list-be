@@ -41,6 +41,14 @@ Pass the Google ID token in the `Authorization` header:
 Authorization: Bearer <google-id-token>
 ```
 
+## Tasks
+
+Manually approve or put a user account on hold by email:
+
+```bash
+python -m app.tasks toggle-user-approved user@example.com
+```
+
 ## Data Schema
 
 See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.
