@@ -109,5 +109,12 @@ class TemplateDetailOut(TemplateOut):
     items: list[TemplateItemOut] = Field(default_factory=list)
 
 
+class DashboardSummary(BaseSchema):
+    list_count: int
+    templates_count: int
+    last_created_lists: list[ListOut] = Field(default_factory=list)
+    last_created_templates: list[TemplateOut] = Field(default_factory=list)
+
+
 class CreateListFromTemplate(BaseSchema):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
