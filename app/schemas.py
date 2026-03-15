@@ -18,11 +18,13 @@ class UserOut(BaseSchema):
 
 
 class ListCreate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
     template_id: Optional[str] = None
 
 
 class ListUpdate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
@@ -30,6 +32,7 @@ class ListOut(BaseSchema):
     id: str
     user_id: str
     name: str
+    completed: bool = False
     template_id: Optional[str] = None
     items_count: int = 0
     created_at: datetime
@@ -120,7 +123,8 @@ class DashboardTemplateOut(TemplateOut):
 
 
 class DashboardSummary(BaseSchema):
-    list_count: int
+    active_list_count: int
+    completed_list_count: int
     templates_count: int
     last_created_lists: list[DashboardListOut] = Field(default_factory=list)
     last_created_templates: list[DashboardTemplateOut] = Field(default_factory=list)

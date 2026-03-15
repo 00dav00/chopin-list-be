@@ -14,6 +14,9 @@ from ..schemas import (
 from ..utils import serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/lists", tags=["lists"])
+LIST_COMPLETED_MUTATION_MESSAGE = (
+    "Completed lists are read-only. Activate the list to edit items."
+)
 
 
 async def _get_list_or_404(db, list_id: str, user_id: str) -> dict:
@@ -36,8 +39,17 @@ async def _get_items_count_by_list_ids(db, list_ids: list[str], user_id: str) ->
     return {row["_id"]: row["count"] for row in grouped}
 
 
+def _ensure_list_is_active(list_doc: dict) -> None:
+    if list_doc.get("completed", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=LIST_COMPLETED_MUTATION_MESSAGE,
+        )
+
+
 async def _serialize_list_with_items_count(db, list_doc: dict, user_id: str) -> dict:
     response = serialize_doc(list_doc)
+    response["completed"] = response.get("completed", False)
     response["items_count"] = await db.items.count_documents(
         {"list_id": response["id"], "user_id": user_id}
     )
@@ -46,9 +58,30 @@ async def _serialize_list_with_items_count(db, list_doc: dict, user_id: str) -> 
 
 @router.get("", response_model=list[ListOut])
 async def list_lists(current_user=Depends(get_current_user), db=Depends(get_db)):
-    cursor = db.lists.find({"user_id": current_user["id"]}).sort("updated_at", -1)
+    cursor = db.lists.find(
+        {"user_id": current_user["id"], "completed": {"$ne": True}}
+    ).sort("updated_at", -1)
     docs = await cursor.to_list(length=None)
     response = [serialize_doc(doc) for doc in docs]
+    for doc in response:
+        doc["completed"] = doc.get("completed", False)
+    items_count_by_list_id = await _get_items_count_by_list_ids(
+        db, [doc["id"] for doc in response], current_user["id"]
+    )
+    for doc in response:
+        doc["items_count"] = items_count_by_list_id.get(doc["id"], 0)
+    return response
+
+
+@router.get("/completed", response_model=list[ListOut])
+async def list_completed_lists(current_user=Depends(get_current_user), db=Depends(get_db)):
+    cursor = db.lists.find({"user_id": current_user["id"], "completed": True}).sort(
+        "updated_at", -1
+    )
+    docs = await cursor.to_list(length=None)
+    response = [serialize_doc(doc) for doc in docs]
+    for doc in response:
+        doc["completed"] = True
     items_count_by_list_id = await _get_items_count_by_list_ids(
         db, [doc["id"] for doc in response], current_user["id"]
     )
@@ -67,6 +100,7 @@ async def create_list(
     doc = {
         "user_id": current_user["id"],
         "name": payload.name,
+        "completed": False,
         "template_id": payload.template_id,
         "created_at": now,
         "updated_at": now,
@@ -74,6 +108,7 @@ async def create_list(
     result = await db.lists.insert_one(doc)
     doc["_id"] = result.inserted_id
     response = serialize_doc(doc)
+    response["completed"] = False
     response["items_count"] = 0
     return response
 
@@ -82,6 +117,32 @@ async def create_list(
 async def get_list(
     list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
 ):
+    list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
+
+
+@router.post("/{list_id}/complete", response_model=ListOut)
+async def complete_list(
+    list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
+):
+    await _get_list_or_404(db, list_id, current_user["id"])
+    await db.lists.update_one(
+        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
+        {"$set": {"completed": True, "updated_at": utcnow()}},
+    )
+    list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
+
+
+@router.post("/{list_id}/activate", response_model=ListOut)
+async def activate_list(
+    list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
+):
+    await _get_list_or_404(db, list_id, current_user["id"])
+    await db.lists.update_one(
+        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
+        {"$set": {"completed": False, "updated_at": utcnow()}},
+    )
     list_doc = await _get_list_or_404(db, list_id, current_user["id"])
     return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
 
@@ -140,7 +201,8 @@ async def create_item(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
-    await _get_list_or_404(db, list_id, current_user["id"])
+    list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    _ensure_list_is_active(list_doc)
     now = utcnow()
     doc = {
         "user_id": current_user["id"],
@@ -165,7 +227,8 @@ async def reorder_items(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
-    await _get_list_or_404(db, list_id, current_user["id"])
+    list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    _ensure_list_is_active(list_doc)
     item_ids = payload.item_ids
     if len(item_ids) != len(set(item_ids)):
         raise HTTPException(

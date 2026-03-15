@@ -291,6 +291,7 @@ async def create_list_from_template(
     list_doc = {
         "user_id": current_user["id"],
         "name": payload.name or template_doc["name"],
+        "completed": False,
         "template_id": template_id,
         "created_at": now,
         "updated_at": now,
@@ -318,5 +319,6 @@ async def create_list_from_template(
         await db.items.insert_many(item_docs)
 
     response = serialize_doc(list_doc)
+    response["completed"] = False
     response["items_count"] = len(template_items)
     return response

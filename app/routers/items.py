@@ -6,6 +6,9 @@ from ..schemas import ItemOut, ItemUpdate
 from ..utils import serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/items", tags=["items"])
+LIST_COMPLETED_MUTATION_MESSAGE = (
+    "Completed lists are read-only. Activate the list to edit items."
+)
 
 
 async def _get_item_or_404(db, item_id: str, user_id: str) -> dict:
@@ -17,6 +20,23 @@ async def _get_item_or_404(db, item_id: str, user_id: str) -> dict:
     return item_doc
 
 
+async def _get_list_or_404(db, list_id: str, user_id: str) -> dict:
+    list_doc = await db.lists.find_one(
+        {"_id": to_object_id(list_id, "list_id"), "user_id": user_id}
+    )
+    if not list_doc:
+        raise HTTPException(status_code=404, detail="List not found.")
+    return list_doc
+
+
+def _ensure_list_is_active(list_doc: dict) -> None:
+    if list_doc.get("completed", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=LIST_COMPLETED_MUTATION_MESSAGE,
+        )
+
+
 @router.patch("/{item_id}", response_model=ItemOut)
 async def update_item(
     item_id: str,
@@ -25,6 +45,8 @@ async def update_item(
     db=Depends(get_db),
 ):
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
+    list_doc = await _get_list_or_404(db, item_doc["list_id"], current_user["id"])
+    _ensure_list_is_active(list_doc)
     updates: dict = {}
     fields = payload.model_fields_set
     if "name" in fields:
@@ -54,6 +76,8 @@ async def toggle_item(
     item_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
 ):
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
+    list_doc = await _get_list_or_404(db, item_doc["list_id"], current_user["id"])
+    _ensure_list_is_active(list_doc)
     new_state = not item_doc.get("purchased", False)
     updates = {
         "purchased": new_state,
@@ -72,7 +96,9 @@ async def toggle_item(
 async def delete_item(
     item_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
 ):
-    await _get_item_or_404(db, item_id, current_user["id"])
+    item_doc = await _get_item_or_404(db, item_id, current_user["id"])
+    list_doc = await _get_list_or_404(db, item_doc["list_id"], current_user["id"])
+    _ensure_list_is_active(list_doc)
     await db.items.delete_one(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]}
     )

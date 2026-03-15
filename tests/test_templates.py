@@ -177,6 +177,7 @@ async def test_create_list_from_template_copies_items(client, db):
     assert response.status_code == 201
     list_data = response.json()
     assert list_data["name"] == "Fruit Run"
+    assert list_data["completed"] is False
     assert list_data["items_count"] == 2
 
     stored_items = await db.items.find({"list_id": list_data["id"]}).to_list(
