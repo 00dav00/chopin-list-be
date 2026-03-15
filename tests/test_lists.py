@@ -38,6 +38,7 @@ async def test_list_lists_empty(client):
 async def test_create_list(client, db, current_user):
     data = await create_list(client, name="Weekly")
     assert data["name"] == "Weekly"
+    assert data["items_count"] == 0
     stored = await db.lists.find_one({"_id": ObjectId(data["id"])})
     assert stored is not None
     assert stored["user_id"] == current_user["id"]
@@ -53,11 +54,29 @@ async def test_get_list_404(client):
 @pytest.mark.asyncio
 async def test_get_list_success(client):
     created = await create_list(client, name="Errands")
+    await create_item(client, created["id"], name="Soap")
     response = await client.get(f"/lists/{created['id']}")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == created["id"]
     assert data["name"] == "Errands"
+    assert data["items_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_lists_includes_items_count(client):
+    first = await create_list(client, name="One")
+    second = await create_list(client, name="Two")
+    await create_item(client, first["id"], name="Milk")
+    await create_item(client, first["id"], name="Bread")
+    await create_item(client, second["id"], name="Coffee")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    counts_by_id = {item["id"]: item["items_count"] for item in data}
+    assert counts_by_id[first["id"]] == 2
+    assert counts_by_id[second["id"]] == 1
 
 
 @pytest.mark.asyncio

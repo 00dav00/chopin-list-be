@@ -25,11 +25,36 @@ async def _get_list_or_404(db, list_id: str, user_id: str) -> dict:
     return list_doc
 
 
+async def _get_items_count_by_list_ids(db, list_ids: list[str], user_id: str) -> dict[str, int]:
+    if not list_ids:
+        return {}
+    pipeline = [
+        {"$match": {"user_id": user_id, "list_id": {"$in": list_ids}}},
+        {"$group": {"_id": "$list_id", "count": {"$sum": 1}}},
+    ]
+    grouped = await db.items.aggregate(pipeline).to_list(length=None)
+    return {row["_id"]: row["count"] for row in grouped}
+
+
+async def _serialize_list_with_items_count(db, list_doc: dict, user_id: str) -> dict:
+    response = serialize_doc(list_doc)
+    response["items_count"] = await db.items.count_documents(
+        {"list_id": response["id"], "user_id": user_id}
+    )
+    return response
+
+
 @router.get("", response_model=list[ListOut])
 async def list_lists(current_user=Depends(get_current_user), db=Depends(get_db)):
     cursor = db.lists.find({"user_id": current_user["id"]}).sort("updated_at", -1)
     docs = await cursor.to_list(length=None)
-    return [serialize_doc(doc) for doc in docs]
+    response = [serialize_doc(doc) for doc in docs]
+    items_count_by_list_id = await _get_items_count_by_list_ids(
+        db, [doc["id"] for doc in response], current_user["id"]
+    )
+    for doc in response:
+        doc["items_count"] = items_count_by_list_id.get(doc["id"], 0)
+    return response
 
 
 @router.post("", response_model=ListOut, status_code=status.HTTP_201_CREATED)
@@ -48,7 +73,9 @@ async def create_list(
     }
     result = await db.lists.insert_one(doc)
     doc["_id"] = result.inserted_id
-    return serialize_doc(doc)
+    response = serialize_doc(doc)
+    response["items_count"] = 0
+    return response
 
 
 @router.get("/{list_id}", response_model=ListOut)
@@ -56,7 +83,7 @@ async def get_list(
     list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
 ):
     list_doc = await _get_list_or_404(db, list_id, current_user["id"])
-    return serialize_doc(list_doc)
+    return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
 
 
 @router.patch("/{list_id}", response_model=ListOut)
@@ -72,14 +99,14 @@ async def update_list(
         updates["name"] = payload.name
     if not updates:
         list_doc = await _get_list_or_404(db, list_id, current_user["id"])
-        return serialize_doc(list_doc)
+        return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
     updates["updated_at"] = utcnow()
     await db.lists.update_one(
         {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
     list_doc = await _get_list_or_404(db, list_id, current_user["id"])
-    return serialize_doc(list_doc)
+    return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
 
 
 @router.delete("/{list_id}", status_code=status.HTTP_204_NO_CONTENT)

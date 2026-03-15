@@ -40,6 +40,7 @@ async def test_create_template_with_items(client):
     ]
     data = await create_template(client, name="Prep", items=items)
     assert data["name"] == "Prep"
+    assert data["items_count"] == 2
     assert [item["name"] for item in data["items"]] == ["First", "Second"]
 
 
@@ -53,7 +54,25 @@ async def test_get_template_includes_items_sorted(client):
     response = await client.get(f"/templates/{created['id']}")
     assert response.status_code == 200
     data = response.json()
+    assert data["items_count"] == 2
     assert [item["name"] for item in data["items"]] == ["First", "Second"]
+
+
+@pytest.mark.asyncio
+async def test_list_templates_includes_items_count(client):
+    first = await create_template(
+        client,
+        name="Prep",
+        items=[{"name": "Milk", "sort_order": 1}, {"name": "Eggs", "sort_order": 2}],
+    )
+    second = await create_template(client, name="Quick")
+
+    response = await client.get("/templates")
+    assert response.status_code == 200
+    data = response.json()
+    counts_by_id = {item["id"]: item["items_count"] for item in data}
+    assert counts_by_id[first["id"]] == 2
+    assert counts_by_id[second["id"]] == 0
 
 
 @pytest.mark.asyncio
@@ -64,6 +83,7 @@ async def test_update_template_no_changes_returns_existing(client):
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == created["id"]
+    assert data["items_count"] == 0
     assert _strip_utc_suffix(data["updated_at"]) == _strip_utc_suffix(
         created["updated_at"]
     )
@@ -78,6 +98,7 @@ async def test_update_template_changes_name_and_updated_at(client):
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Saturday"
+    assert data["items_count"] == 0
     assert data["updated_at"] != created["updated_at"]
 
 
@@ -156,6 +177,7 @@ async def test_create_list_from_template_copies_items(client, db):
     assert response.status_code == 201
     list_data = response.json()
     assert list_data["name"] == "Fruit Run"
+    assert list_data["items_count"] == 2
 
     stored_items = await db.items.find({"list_id": list_data["id"]}).to_list(
         length=None

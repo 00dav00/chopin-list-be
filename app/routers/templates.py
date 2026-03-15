@@ -27,6 +27,27 @@ async def _get_template_or_404(db, template_id: str, user_id: str) -> dict:
     return template_doc
 
 
+async def _get_items_count_by_template_ids(
+    db, template_ids: list[str], user_id: str
+) -> dict[str, int]:
+    if not template_ids:
+        return {}
+    pipeline = [
+        {"$match": {"user_id": user_id, "template_id": {"$in": template_ids}}},
+        {"$group": {"_id": "$template_id", "count": {"$sum": 1}}},
+    ]
+    grouped = await db.template_items.aggregate(pipeline).to_list(length=None)
+    return {row["_id"]: row["count"] for row in grouped}
+
+
+async def _serialize_template_with_items_count(db, template_doc: dict, user_id: str) -> dict:
+    response = serialize_doc(template_doc)
+    response["items_count"] = await db.template_items.count_documents(
+        {"template_id": response["id"], "user_id": user_id}
+    )
+    return response
+
+
 async def _get_template_item_or_404(
     db, template_id: str, item_id: str, user_id: str
 ) -> dict:
@@ -46,7 +67,13 @@ async def _get_template_item_or_404(
 async def list_templates(current_user=Depends(get_current_user), db=Depends(get_db)):
     cursor = db.templates.find({"user_id": current_user["id"]}).sort("updated_at", -1)
     docs = await cursor.to_list(length=None)
-    return [serialize_doc(doc) for doc in docs]
+    response = [serialize_doc(doc) for doc in docs]
+    items_count_by_template_id = await _get_items_count_by_template_ids(
+        db, [doc["id"] for doc in response], current_user["id"]
+    )
+    for doc in response:
+        doc["items_count"] = items_count_by_template_id.get(doc["id"], 0)
+    return response
 
 
 @router.post("", response_model=TemplateDetailOut, status_code=status.HTTP_201_CREATED)
@@ -87,6 +114,7 @@ async def create_template(
     ).sort([("sort_order", 1), ("created_at", 1)])
     items = [serialize_doc(doc) for doc in await items_cursor.to_list(length=None)]
     response = serialize_doc(template_doc)
+    response["items_count"] = len(items)
     response["items"] = items
     return response
 
@@ -101,6 +129,7 @@ async def get_template(
     ).sort([("sort_order", 1), ("created_at", 1)])
     items = [serialize_doc(doc) for doc in await items_cursor.to_list(length=None)]
     response = serialize_doc(template_doc)
+    response["items_count"] = len(items)
     response["items"] = items
     return response
 
@@ -118,14 +147,18 @@ async def update_template(
         updates["name"] = payload.name
     if not updates:
         template_doc = await _get_template_or_404(db, template_id, current_user["id"])
-        return serialize_doc(template_doc)
+        return await _serialize_template_with_items_count(
+            db, template_doc, current_user["id"]
+        )
     updates["updated_at"] = utcnow()
     await db.templates.update_one(
         {"_id": to_object_id(template_id, "template_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
     template_doc = await _get_template_or_404(db, template_id, current_user["id"])
-    return serialize_doc(template_doc)
+    return await _serialize_template_with_items_count(
+        db, template_doc, current_user["id"]
+    )
 
 
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -284,4 +317,6 @@ async def create_list_from_template(
             )
         await db.items.insert_many(item_docs)
 
-    return serialize_doc(list_doc)
+    response = serialize_doc(list_doc)
+    response["items_count"] = len(template_items)
+    return response

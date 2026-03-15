@@ -31,6 +31,7 @@ class ListOut(BaseSchema):
     user_id: str
     name: str
     template_id: Optional[str] = None
+    items_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -101,6 +102,7 @@ class TemplateOut(BaseSchema):
     id: str
     user_id: str
     name: str
+    items_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -109,11 +111,19 @@ class TemplateDetailOut(TemplateOut):
     items: list[TemplateItemOut] = Field(default_factory=list)
 
 
+class DashboardListOut(ListOut):
+    items_count: int = 0
+
+
+class DashboardTemplateOut(TemplateOut):
+    items_count: int = 0
+
+
 class DashboardSummary(BaseSchema):
     list_count: int
     templates_count: int
-    last_created_lists: list[ListOut] = Field(default_factory=list)
-    last_created_templates: list[TemplateOut] = Field(default_factory=list)
+    last_created_lists: list[DashboardListOut] = Field(default_factory=list)
+    last_created_templates: list[DashboardTemplateOut] = Field(default_factory=list)
 
 
 class CreateListFromTemplate(BaseSchema):
