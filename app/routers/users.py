@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import get_current_user
 from ..db import get_db
-from ..schemas import DashboardSummary, UserOut
+from ..schemas import DashboardSummary, PendingUserOut, UserOut
 from ..utils import serialize_doc
 
 router = APIRouter(prefix="/me", tags=["users"])
+
+
+def require_admin(current_user: dict):
+    if not current_user.get("admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required.")
 
 
 @router.get("", response_model=UserOut)
@@ -75,3 +80,16 @@ async def read_dashboard_summary(current_user=Depends(get_current_user), db=Depe
         "last_created_lists": last_created_lists,
         "last_created_templates": last_created_templates,
     }
+
+
+@router.get("/admin/pending-users", response_model=list[PendingUserOut])
+async def list_pending_users(current_user=Depends(get_current_user), db=Depends(get_db)):
+    require_admin(current_user)
+
+    cursor = db.users.find({"approved": {"$ne": True}}).sort("created_at", -1)
+    users = [serialize_doc(doc) for doc in await cursor.to_list(length=None)]
+
+    for user in users:
+        user["approved"] = bool(user.get("approved", False))
+
+    return users

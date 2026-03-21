@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 import pytest
 
+from app.auth import get_current_user
+
 
 @pytest.mark.asyncio
 async def test_read_me_returns_current_user(client, current_user):
@@ -190,3 +192,68 @@ async def test_dashboard_summary_filters_by_user_and_orders_by_created_at(client
         0,
         0,
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_pending_users_requires_admin(client):
+    response = await client.get("/me/admin/pending-users")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required."
+
+
+@pytest.mark.asyncio
+async def test_list_pending_users_returns_only_not_approved_users(client, app, db):
+    admin_user = {
+        "id": "admin-1",
+        "email": "admin@example.com",
+        "name": "Admin",
+        "avatar_url": None,
+        "admin": True,
+        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "last_login_at": datetime(2024, 1, 2, tzinfo=timezone.utc),
+    }
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    now = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    pending_id = ObjectId()
+    pending_no_approved_id = ObjectId()
+    approved_id = ObjectId()
+
+    await db.users.insert_many(
+        [
+            {
+                "_id": pending_id,
+                "google_sub": "pending-sub",
+                "email": "pending@example.com",
+                "name": "Pending",
+                "approved": False,
+                "created_at": now,
+                "last_login_at": now,
+            },
+            {
+                "_id": pending_no_approved_id,
+                "google_sub": "pending-sub-2",
+                "email": "pending2@example.com",
+                "name": "Pending 2",
+                "created_at": now + timedelta(minutes=1),
+                "last_login_at": now + timedelta(minutes=1),
+            },
+            {
+                "_id": approved_id,
+                "google_sub": "approved-sub",
+                "email": "approved@example.com",
+                "name": "Approved",
+                "approved": True,
+                "created_at": now + timedelta(minutes=2),
+                "last_login_at": now + timedelta(minutes=2),
+            },
+        ]
+    )
+
+    response = await client.get("/me/admin/pending-users")
+    assert response.status_code == 200
+
+    payload = response.json()
+    returned_ids = [user["id"] for user in payload]
+    assert returned_ids == [str(pending_no_approved_id), str(pending_id)]
+    assert all(user["approved"] is False for user in payload)

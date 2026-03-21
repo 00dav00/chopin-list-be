@@ -18,6 +18,16 @@ class UserOut(BaseSchema):
     last_login_at: Optional[datetime] = None
 
 
+class PendingUserOut(BaseSchema):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    approved: bool = False
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+
 class ListCreate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
