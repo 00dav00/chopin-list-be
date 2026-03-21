@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import ReturnDocument
 
 from ..auth import get_current_user
 from ..db import get_db
-from ..schemas import DashboardSummary, PendingUserOut, UserOut
+from ..schemas import ConfirmedUserOut, DashboardSummary, PendingUserOut, UserOut
 from ..utils import serialize_doc
 
 router = APIRouter(prefix="/me", tags=["users"])
@@ -14,6 +14,20 @@ router = APIRouter(prefix="/me", tags=["users"])
 def require_admin(current_user: dict):
     if not current_user.get("admin", False):
         raise HTTPException(status_code=403, detail="Admin access required.")
+
+
+def to_user_object_id(user_id: str) -> ObjectId:
+    try:
+        return ObjectId(user_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+
+
+async def get_user_or_404(db, user_id: str) -> dict:
+    user_doc = await db.users.find_one({"_id": to_user_object_id(user_id)})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return user_doc
 
 
 @router.get("", response_model=UserOut)
@@ -76,13 +90,23 @@ async def read_dashboard_summary(current_user=Depends(get_current_user), db=Depe
     for doc in last_created_templates:
         doc["items_count"] = template_items_counts.get(doc["id"], 0)
 
-    return {
+    summary = {
         "active_list_count": active_list_count,
         "completed_list_count": completed_list_count,
         "templates_count": templates_count,
         "last_created_lists": last_created_lists,
         "last_created_templates": last_created_templates,
     }
+
+    if current_user.get("admin", False):
+        summary["confirmed_users_count"] = await db.users.count_documents(
+            {"approved": True}
+        )
+        summary["pending_users_count"] = await db.users.count_documents(
+            {"approved": {"$ne": True}}
+        )
+
+    return summary
 
 
 @router.get("/admin/pending-users", response_model=list[PendingUserOut])
@@ -102,13 +126,8 @@ async def list_pending_users(current_user=Depends(get_current_user), db=Depends(
 async def approve_user(user_id: str, current_user=Depends(get_current_user), db=Depends(get_db)):
     require_admin(current_user)
 
-    try:
-        object_id = ObjectId(user_id)
-    except InvalidId as exc:
-        raise HTTPException(status_code=404, detail="User not found.") from exc
-
     result = await db.users.find_one_and_update(
-        {"_id": object_id},
+        {"_id": to_user_object_id(user_id)},
         {"$set": {"approved": True}},
         return_document=ReturnDocument.AFTER,
     )
@@ -118,3 +137,55 @@ async def approve_user(user_id: str, current_user=Depends(get_current_user), db=
     user = serialize_doc(result)
     user["approved"] = bool(user.get("approved", False))
     return user
+
+
+@router.get("/admin/confirmed-users", response_model=list[ConfirmedUserOut])
+async def list_confirmed_users(current_user=Depends(get_current_user), db=Depends(get_db)):
+    require_admin(current_user)
+
+    cursor = db.users.find({"approved": True}).sort("created_at", -1)
+    users = [serialize_doc(doc) for doc in await cursor.to_list(length=None)]
+    for user in users:
+        user["approved"] = bool(user.get("approved", False))
+    return users
+
+
+@router.post("/admin/users/{user_id}/unconfirm", response_model=ConfirmedUserOut)
+async def unconfirm_user(user_id: str, current_user=Depends(get_current_user), db=Depends(get_db)):
+    require_admin(current_user)
+
+    result = await db.users.find_one_and_update(
+        {"_id": to_user_object_id(user_id)},
+        {"$set": {"approved": False}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user = serialize_doc(result)
+    user["approved"] = bool(user.get("approved", False))
+    return user
+
+
+@router.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_pending_user(
+    user_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
+):
+    require_admin(current_user)
+
+    user_doc = await get_user_or_404(db, user_id)
+    if user_doc.get("approved", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirmed users cannot be deleted from pending users.",
+        )
+
+    serialized_user = serialize_doc(user_doc)
+    deleted_user_id = serialized_user["id"]
+
+    await db.users.delete_one({"_id": to_user_object_id(user_id)})
+    await db.items.delete_many({"user_id": deleted_user_id})
+    await db.lists.delete_many({"user_id": deleted_user_id})
+    await db.template_items.delete_many({"user_id": deleted_user_id})
+    await db.templates.delete_many({"user_id": deleted_user_id})
+    return None

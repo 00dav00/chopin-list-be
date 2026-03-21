@@ -28,6 +28,16 @@ class PendingUserOut(BaseSchema):
     last_login_at: Optional[datetime] = None
 
 
+class ConfirmedUserOut(BaseSchema):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    approved: bool = True
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+
 class ListCreate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
@@ -144,6 +154,8 @@ class DashboardSummary(BaseSchema):
     active_list_count: int
     completed_list_count: int
     templates_count: int
+    confirmed_users_count: Optional[int] = None
+    pending_users_count: Optional[int] = None
     last_created_lists: list[DashboardListOut] = Field(default_factory=list)
     last_created_templates: list[DashboardTemplateOut] = Field(default_factory=list)
 
