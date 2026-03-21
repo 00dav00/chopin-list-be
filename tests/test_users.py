@@ -257,3 +257,83 @@ async def test_list_pending_users_returns_only_not_approved_users(client, app, d
     returned_ids = [user["id"] for user in payload]
     assert returned_ids == [str(pending_no_approved_id), str(pending_id)]
     assert all(user["approved"] is False for user in payload)
+
+
+@pytest.mark.asyncio
+async def test_approve_user_requires_admin(client, db):
+    user_id = ObjectId()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await db.users.insert_one(
+        {
+            "_id": user_id,
+            "google_sub": "pending-sub",
+            "email": "pending@example.com",
+            "approved": False,
+            "created_at": now,
+            "last_login_at": now,
+        }
+    )
+
+    response = await client.post(f"/me/admin/users/{str(user_id)}/approve")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required."
+
+
+@pytest.mark.asyncio
+async def test_approve_user_sets_approved_true_and_is_idempotent(client, app, db):
+    admin_user = {
+        "id": "admin-1",
+        "email": "admin@example.com",
+        "name": "Admin",
+        "avatar_url": None,
+        "admin": True,
+        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "last_login_at": datetime(2024, 1, 2, tzinfo=timezone.utc),
+    }
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    user_id = ObjectId()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await db.users.insert_one(
+        {
+            "_id": user_id,
+            "google_sub": "pending-sub",
+            "email": "pending@example.com",
+            "name": "Pending",
+            "approved": False,
+            "created_at": now,
+            "last_login_at": now,
+        }
+    )
+
+    response = await client.post(f"/me/admin/users/{str(user_id)}/approve")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(user_id)
+    assert payload["approved"] is True
+
+    second_response = await client.post(f"/me/admin/users/{str(user_id)}/approve")
+    assert second_response.status_code == 200
+    assert second_response.json()["approved"] is True
+
+    stored = await db.users.find_one({"_id": user_id})
+    assert stored is not None
+    assert stored["approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_approve_user_returns_404_for_unknown_user(client, app):
+    admin_user = {
+        "id": "admin-1",
+        "email": "admin@example.com",
+        "name": "Admin",
+        "avatar_url": None,
+        "admin": True,
+        "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "last_login_at": datetime(2024, 1, 2, tzinfo=timezone.utc),
+    }
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = await client.post(f"/me/admin/users/{str(ObjectId())}/approve")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found."

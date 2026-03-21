@@ -51,12 +51,14 @@ class ListOut(BaseSchema):
 
 
 class ItemCreate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
     qty: Optional[float] = None
     sort_order: int = 0
 
 
 class ItemUpdate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     qty: Optional[float] = None
     sort_order: Optional[int] = None
@@ -77,16 +79,19 @@ class ItemOut(BaseSchema):
 
 
 class ReorderListItems(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     item_ids: list[str]
 
 
 class TemplateItemCreate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
     qty: Optional[float] = None
     sort_order: int = 0
 
 
 class TemplateItemUpdate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     qty: Optional[float] = None
     sort_order: Optional[int] = None
@@ -104,11 +109,13 @@ class TemplateItemOut(BaseSchema):
 
 
 class TemplateCreate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
     items: list[TemplateItemCreate] = Field(default_factory=list)
 
 
 class TemplateUpdate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
@@ -142,4 +149,5 @@ class DashboardSummary(BaseSchema):
 
 
 class CreateListFromTemplate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)

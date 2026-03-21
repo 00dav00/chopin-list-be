@@ -151,3 +151,34 @@ async def test_get_current_user_rejects_unapproved_existing_user(db, monkeypatch
         await auth.get_current_user(authorization="Bearer valid", db=db)
     assert exc.value.status_code == 403
     assert exc.value.detail == "Account pending approval."
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_ignores_admin_flag_from_google_payload(db, monkeypatch):
+    def fake_verify(*args, **kwargs):
+        return {
+            "sub": "sub123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.png",
+            "iss": "accounts.google.com",
+            "admin": True,
+        }
+
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
+
+    await db.users.insert_one(
+        {
+            "google_sub": "sub123",
+            "approved": True,
+            "admin": False,
+            "email": "old@example.com",
+        }
+    )
+
+    user = await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert user["admin"] is False
+
+    stored = await db.users.find_one({"google_sub": "sub123"})
+    assert stored is not None
+    assert stored["admin"] is False

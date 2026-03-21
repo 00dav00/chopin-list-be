@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
+from bson import ObjectId
+from bson.errors import InvalidId
+from pymongo import ReturnDocument
 
 from ..auth import get_current_user
 from ..db import get_db
@@ -93,3 +96,25 @@ async def list_pending_users(current_user=Depends(get_current_user), db=Depends(
         user["approved"] = bool(user.get("approved", False))
 
     return users
+
+
+@router.post("/admin/users/{user_id}/approve", response_model=PendingUserOut)
+async def approve_user(user_id: str, current_user=Depends(get_current_user), db=Depends(get_db)):
+    require_admin(current_user)
+
+    try:
+        object_id = ObjectId(user_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+
+    result = await db.users.find_one_and_update(
+        {"_id": object_id},
+        {"$set": {"approved": True}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user = serialize_doc(result)
+    user["approved"] = bool(user.get("approved", False))
+    return user
