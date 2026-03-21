@@ -13,6 +13,7 @@ class UserOut(BaseSchema):
     email: Optional[str] = None
     name: Optional[str] = None
     avatar_url: Optional[str] = None
+    admin: bool = False
     created_at: datetime
     last_login_at: Optional[datetime] = None
 

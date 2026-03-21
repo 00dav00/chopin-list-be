@@ -12,6 +12,7 @@ async def test_read_me_returns_current_user(client, current_user):
     assert data["id"] == current_user["id"]
     assert data["email"] == current_user["email"]
     assert data["name"] == current_user["name"]
+    assert data["admin"] is False
     assert "created_at" in data
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from app.tasks import toggle_user_approved_by_email
+from app.tasks import set_user_admin_by_email, toggle_user_approved_by_email
 
 
 @pytest.mark.asyncio
@@ -33,3 +33,39 @@ async def test_toggle_user_approved_by_email_updates_user(db):
 async def test_toggle_user_approved_by_email_returns_none_when_user_not_found(db):
     approved = await toggle_user_approved_by_email(db=db, email="missing@example.com")
     assert approved is None
+
+
+@pytest.mark.asyncio
+async def test_set_user_admin_by_email_updates_user(db):
+    email = "user@example.com"
+    await db.users.insert_one(
+        {
+            "google_sub": "sub-123",
+            "email": email,
+            "admin": False,
+        }
+    )
+
+    admin = await set_user_admin_by_email(db=db, email=email, is_admin=True)
+    assert admin is True
+
+    stored = await db.users.find_one({"email": email})
+    assert stored is not None
+    assert stored["admin"] is True
+
+    admin = await set_user_admin_by_email(db=db, email=email, is_admin=False)
+    assert admin is False
+
+    stored = await db.users.find_one({"email": email})
+    assert stored is not None
+    assert stored["admin"] is False
+
+
+@pytest.mark.asyncio
+async def test_set_user_admin_by_email_returns_none_when_user_not_found(db):
+    admin = await set_user_admin_by_email(
+        db=db,
+        email="missing@example.com",
+        is_admin=True,
+    )
+    assert admin is None

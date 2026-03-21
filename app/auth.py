@@ -44,6 +44,7 @@ async def get_current_user(
         "$setOnInsert": {
             "google_sub": id_info.get("sub"),
             "approved": False,
+            "admin": False,
             "created_at": now,
         },
     }
@@ -54,6 +55,7 @@ async def get_current_user(
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
+    user_doc.setdefault("admin", False)
     if not user_doc.get("approved", True):
         raise HTTPException(status_code=403, detail="Account pending approval.")
 

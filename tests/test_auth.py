@@ -69,6 +69,7 @@ async def test_get_current_user_creates_user_on_hold_and_returns_403(db, monkeyp
     stored = await db.users.find_one({"google_sub": "sub123"})
     assert stored is not None
     assert stored["approved"] is False
+    assert stored["admin"] is False
     assert stored["email"] == "user@example.com"
 
 
@@ -96,7 +97,34 @@ async def test_get_current_user_returns_approved_user(db, monkeypatch):
 
     assert user["email"] == "user@example.com"
     assert user["name"] == "Test User"
+    assert user["admin"] is False
     assert "id" in user
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_preserves_existing_admin_status(db, monkeypatch):
+    def fake_verify(*args, **kwargs):
+        return {
+            "sub": "sub123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.png",
+            "iss": "accounts.google.com",
+        }
+
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
+
+    await db.users.insert_one(
+        {
+            "google_sub": "sub123",
+            "approved": True,
+            "admin": True,
+            "email": "old@example.com",
+        }
+    )
+    user = await auth.get_current_user(authorization="Bearer valid", db=db)
+
+    assert user["admin"] is True
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,7 @@ Fields:
 - `_id`: `ObjectId` (serialized as `id`)
 - `google_sub`: `string` (unique index)
 - `approved`: `bool` (new users default to `false`)
+- `admin`: `bool` (new users default to `false`; changed only via ops tasks)
 - `email`: `string | null`
 - `name`: `string | null`
 - `avatar_url`: `string | null`

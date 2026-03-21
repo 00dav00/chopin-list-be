@@ -49,6 +49,13 @@ Manually approve or put a user account on hold by email:
 python -m app.tasks toggle-user-approved user@example.com
 ```
 
+Grant or remove admin role by email:
+
+```bash
+python -m app.tasks set-user-admin user@example.com
+python -m app.tasks unset-user-admin user@example.com
+```
+
 ## Data Schema
 
 See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.
