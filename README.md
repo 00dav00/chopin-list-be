@@ -59,3 +59,7 @@ python -m app.tasks unset-user-admin user@example.com
 ## Data Schema
 
 See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.
+
+## Railway Deployment
+
+See [`docs/railway-live-updates.md`](docs/railway-live-updates.md) for live updates deployment notes.
