@@ -71,6 +71,20 @@ async def test_get_list_success(client):
 
 
 @pytest.mark.asyncio
+async def test_create_item_updates_parent_list_updated_at(client):
+    created = await create_list(client, name="Errands")
+
+    response = await client.post(
+        f"/lists/{created['id']}/items", json={"name": "Soap", "sort_order": 0}
+    )
+    assert response.status_code == 201
+
+    refreshed = await client.get(f"/lists/{created['id']}")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["updated_at"] != created["updated_at"]
+
+
+@pytest.mark.asyncio
 async def test_list_lists_includes_items_count(client):
     first = await create_list(client, name="One")
     second = await create_list(client, name="Two")

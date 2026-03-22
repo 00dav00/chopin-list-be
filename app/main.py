@@ -4,14 +4,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .db import init_db
+from .db import get_db, init_db
 from .routers import items, lists, templates, users
 from .routers.v2 import live as live_v2
+from .routers.v2.live import LiveBroker, MongoChangeStreamEventSource
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    yield
+    app.state.live_broker = LiveBroker()
+    app.state.live_event_source = MongoChangeStreamEventSource(
+        get_db(), app.state.live_broker
+    )
+    await app.state.live_event_source.start()
+    try:
+        yield
+    finally:
+        await app.state.live_event_source.stop()
 
 
 app = FastAPI(title="Shoplist API", version="1.0.0", lifespan=lifespan)

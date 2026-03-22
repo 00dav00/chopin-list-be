@@ -6,7 +6,12 @@ from starlette.websockets import WebSocketDisconnect
 import app.db as db_module
 from app.db import get_db
 from app.main import app
-from app.routers.v2.live import get_live_current_user
+from app.routers.v2.live import (
+    LiveBroker,
+    MongoChangeStreamEventSource,
+    get_live_broker,
+    get_live_current_user,
+)
 
 
 class _FakeLists:
@@ -47,6 +52,31 @@ def test_v2_live_socket_scaffold_message():
     assert payload == {"type": "live.ready", "list_id": list_id}
 
 
+def test_v2_live_socket_receives_broker_event():
+    list_id = str(ObjectId())
+    broker = LiveBroker()
+    app.dependency_overrides[get_live_current_user] = lambda: {"id": "user-123"}
+    app.dependency_overrides[get_db] = lambda: _FakeDB(owned_list_id=list_id)
+    app.dependency_overrides[get_live_broker] = lambda: broker
+
+    with _new_test_client() as client:
+        with client.websocket_connect(f"/v2/live/lists/{list_id}/ws") as websocket:
+            ready = websocket.receive_json()
+            broker.publish_nowait(
+                list_id,
+                {"type": "list.changed", "list_id": list_id, "operation": "update"},
+            )
+            changed = websocket.receive_json()
+
+    app.dependency_overrides.clear()
+    assert ready == {"type": "live.ready", "list_id": list_id}
+    assert changed == {
+        "type": "list.changed",
+        "list_id": list_id,
+        "operation": "update",
+    }
+
+
 def test_v2_live_socket_rejects_missing_token():
     app.dependency_overrides[get_db] = lambda: _FakeDB(owned_list_id=None)
 
@@ -71,3 +101,41 @@ def test_v2_live_socket_rejects_non_owned_list():
 
     app.dependency_overrides.clear()
     assert exc_info.value.code == 1008
+
+
+def test_live_broker_publishs_to_subscribers():
+    list_id = str(ObjectId())
+    broker = LiveBroker()
+    queue = broker.subscribe(list_id)
+
+    broker.publish_nowait(list_id, {"type": "list.changed", "list_id": list_id})
+
+    assert queue.get_nowait() == {"type": "list.changed", "list_id": list_id}
+
+
+def test_event_source_maps_update_and_delete_changes():
+    update_list_id = str(ObjectId())
+    delete_list_id = str(ObjectId())
+    update_event = MongoChangeStreamEventSource.event_from_change(
+        {
+            "operationType": "update",
+            "fullDocument": {"_id": ObjectId(update_list_id)},
+        }
+    )
+    delete_event = MongoChangeStreamEventSource.event_from_change(
+        {
+            "operationType": "delete",
+            "documentKey": {"_id": ObjectId(delete_list_id)},
+        }
+    )
+
+    assert update_event == {
+        "type": "list.changed",
+        "list_id": update_list_id,
+        "operation": "update",
+    }
+    assert delete_event == {
+        "type": "list.changed",
+        "list_id": delete_list_id,
+        "operation": "delete",
+    }

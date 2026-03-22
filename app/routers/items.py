@@ -67,6 +67,10 @@ async def update_item(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
+    await db.lists.update_one(
+        {"_id": list_doc["_id"], "user_id": current_user["id"]},
+        {"$set": {"updated_at": updates["updated_at"]}},
+    )
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
     return serialize_doc(item_doc)
 
@@ -88,6 +92,10 @@ async def toggle_item(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
+    await db.lists.update_one(
+        {"_id": list_doc["_id"], "user_id": current_user["id"]},
+        {"$set": {"updated_at": updates["updated_at"]}},
+    )
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
     return serialize_doc(item_doc)
 
@@ -101,5 +109,9 @@ async def delete_item(
     _ensure_list_is_active(list_doc)
     await db.items.delete_one(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]}
+    )
+    await db.lists.update_one(
+        {"_id": list_doc["_id"], "user_id": current_user["id"]},
+        {"$set": {"updated_at": utcnow()}},
     )
     return None

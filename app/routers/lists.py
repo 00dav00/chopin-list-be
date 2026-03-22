@@ -217,6 +217,10 @@ async def create_item(
     }
     result = await db.items.insert_one(doc)
     doc["_id"] = result.inserted_id
+    await db.lists.update_one(
+        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
+        {"$set": {"updated_at": now}},
+    )
     return serialize_doc(doc)
 
 
