@@ -164,6 +164,72 @@ async def test_delete_template_item(client, db):
 
 
 @pytest.mark.asyncio
+async def test_reorder_template_items_happy_path(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+    item_c = await create_template_item(client, created["id"], name="C", sort_order=2)
+
+    new_order = [item_c["id"], item_a["id"], item_b["id"]]
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": new_order},
+    )
+    assert response.status_code == 200
+    items = response.json()
+    assert [item["name"] for item in items] == ["C", "A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_missing_item_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"]]},  # missing item_b
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_duplicate_ids_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"], item_a["id"]]},  # duplicate
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_unknown_id_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    unknown_id = str(ObjectId())
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"], unknown_id]},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_nonexistent_template_returns_404(client):
+    nonexistent_id = str(ObjectId())
+    response = await client.post(
+        f"/templates/{nonexistent_id}/items/reorder",
+        json={"item_ids": []},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_create_list_from_template_copies_items(client, db):
     items = [
         {"name": "Bananas", "sort_order": 2},

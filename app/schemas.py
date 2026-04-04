@@ -93,6 +93,11 @@ class ReorderListItems(BaseSchema):
     item_ids: list[str]
 
 
+class ReorderTemplateItems(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
+    item_ids: list[str]
+
+
 class TemplateItemCreate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)

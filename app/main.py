@@ -12,15 +12,17 @@ from .routers.v2.live import LiveBroker, MongoChangeStreamEventSource
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    app.state.live_broker = LiveBroker()
-    app.state.live_event_source = MongoChangeStreamEventSource(
-        get_db(), app.state.live_broker
-    )
-    await app.state.live_event_source.start()
+    if settings.lists_v2:
+        app.state.live_broker = LiveBroker()
+        app.state.live_event_source = MongoChangeStreamEventSource(
+            get_db(), app.state.live_broker
+        )
+        await app.state.live_event_source.start()
     try:
         yield
     finally:
-        await app.state.live_event_source.stop()
+        if settings.lists_v2:
+            await app.state.live_event_source.stop()
 
 
 app = FastAPI(title="Shoplist API", version="1.0.0", lifespan=lifespan)

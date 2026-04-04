@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     chopin_list_fe_url: str = Field(
         alias="CHOPIN_LIST_FE_URL",
     )
+    lists_v2: bool = Field(
+        default=False,
+        alias="LISTS_V2",
+    )
 
 
 settings = Settings()
