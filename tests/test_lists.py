@@ -101,6 +101,83 @@ async def test_list_lists_includes_items_count(client):
 
 
 @pytest.mark.asyncio
+async def test_list_out_schema_accepts_and_serialises_unpurchased_items_count():
+    from app.schemas import ListOut
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = {
+        "id": "abc123",
+        "user_id": "user-1",
+        "name": "Groceries",
+        "completed": False,
+        "template_id": None,
+        "items_count": 5,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    with_count = ListOut(**{**base, "unpurchased_items_count": 3})
+    assert with_count.unpurchased_items_count == 3
+    dumped = with_count.model_dump()
+    assert dumped["unpurchased_items_count"] == 3
+
+    without_count = ListOut(**base)
+    assert without_count.unpurchased_items_count is None
+    dumped_none = without_count.model_dump()
+    assert dumped_none["unpurchased_items_count"] is None
+
+    with_zero = ListOut(**{**base, "unpurchased_items_count": 0})
+    assert with_zero.unpurchased_items_count == 0
+
+
+@pytest.mark.asyncio
+async def test_list_lists_includes_unpurchased_items_count(client):
+    lst = await create_list(client, name="Shopping")
+    item_a = await create_item(client, lst["id"], name="Milk")
+    item_b = await create_item(client, lst["id"], name="Eggs")
+    await create_item(client, lst["id"], name="Bread")
+
+    # Purchase two of the three items
+    await client.post(f"/items/{item_a['id']}/toggle")
+    await client.post(f"/items/{item_b['id']}/toggle")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["items_count"] == 3
+    assert found["unpurchased_items_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_lists_unpurchased_items_count_zero_when_all_purchased(client):
+    lst = await create_list(client, name="Quick run")
+    item = await create_item(client, lst["id"], name="Salt")
+    await client.post(f"/items/{item['id']}/toggle")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["unpurchased_items_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_lists_unpurchased_items_count_equals_items_count_when_none_purchased(client):
+    lst = await create_list(client, name="Full basket")
+    await create_item(client, lst["id"], name="Juice")
+    await create_item(client, lst["id"], name="Yogurt")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["items_count"] == 2
+    assert found["unpurchased_items_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_list_lists_excludes_completed_and_completed_endpoint_lists_only_completed(client):
     active = await create_list(client, name="Active")
     completed = await create_list(client, name="Done")

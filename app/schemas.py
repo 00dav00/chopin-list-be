@@ -56,6 +56,7 @@ class ListOut(BaseSchema):
     completed: bool = False
     template_id: Optional[str] = None
     items_count: int = 0
+    unpurchased_items_count: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

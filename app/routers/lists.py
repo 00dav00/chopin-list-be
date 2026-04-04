@@ -39,6 +39,17 @@ async def _get_items_count_by_list_ids(db, list_ids: list[str], user_id: str) ->
     return {row["_id"]: row["count"] for row in grouped}
 
 
+async def _get_unpurchased_items_count_by_list_ids(db, list_ids: list[str], user_id: str) -> dict[str, int]:
+    if not list_ids:
+        return {}
+    pipeline = [
+        {"$match": {"user_id": user_id, "list_id": {"$in": list_ids}, "purchased": {"$ne": True}}},
+        {"$group": {"_id": "$list_id", "count": {"$sum": 1}}},
+    ]
+    grouped = await db.items.aggregate(pipeline).to_list(length=None)
+    return {row["_id"]: row["count"] for row in grouped}
+
+
 def _ensure_list_is_active(list_doc: dict) -> None:
     if list_doc.get("completed", False):
         raise HTTPException(
@@ -65,11 +76,16 @@ async def list_lists(current_user=Depends(get_current_user), db=Depends(get_db))
     response = [serialize_doc(doc) for doc in docs]
     for doc in response:
         doc["completed"] = doc.get("completed", False)
+    list_ids = [doc["id"] for doc in response]
     items_count_by_list_id = await _get_items_count_by_list_ids(
-        db, [doc["id"] for doc in response], current_user["id"]
+        db, list_ids, current_user["id"]
+    )
+    unpurchased_items_count_by_list_id = await _get_unpurchased_items_count_by_list_ids(
+        db, list_ids, current_user["id"]
     )
     for doc in response:
         doc["items_count"] = items_count_by_list_id.get(doc["id"], 0)
+        doc["unpurchased_items_count"] = unpurchased_items_count_by_list_id.get(doc["id"], 0)
     return response
 
 
