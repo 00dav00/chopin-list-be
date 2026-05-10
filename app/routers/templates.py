@@ -6,7 +6,7 @@ from ..db import get_db
 from ..schemas import (
     CreateListFromTemplate,
     ListOut,
-    ReorderTemplateItems,
+    ReorderItems,
     TemplateCreate,
     TemplateDetailOut,
     TemplateItemCreate,
@@ -276,7 +276,7 @@ async def delete_template_item(
 @router.post("/{template_id}/items/reorder", response_model=list[TemplateItemOut])
 async def reorder_template_items(
     template_id: str,
-    payload: ReorderTemplateItems,
+    payload: ReorderItems,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):

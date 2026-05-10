@@ -60,6 +60,10 @@ python -m app.tasks unset-user-admin user@example.com
 
 See [`docs/data-schema.md`](docs/data-schema.md) for collection fields, indexes, and relationships.
 
+## Conditional GET (ETag / 304)
+
+`GET /lists/{list_id}` supports `If-None-Match` for cheap polling. See [`docs/conditional-get.md`](docs/conditional-get.md) for the contract.
+
 ## Railway Deployment
 
-See [`docs/railway-live-updates.md`](docs/railway-live-updates.md) for live updates deployment notes.
+See [`docs/railway-live-updates.md`](docs/railway-live-updates.md) for deployment notes.

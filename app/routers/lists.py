@@ -1,4 +1,5 @@
-from typing import Annotated, Optional, Union
+from datetime import datetime, timezone
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pymongo import UpdateOne
@@ -11,14 +12,14 @@ from ..schemas import (
     ListCreate,
     ListOut,
     ListUpdate,
-    ReorderListItems,
+    ReorderItems,
 )
 from ..utils import mark_list_touched, serialize_doc, to_object_id, utcnow
 
 CACHE_CONTROL_PRIVATE_NO_CACHE = "private, no-cache"
 
 
-def _list_etag(updated_at) -> Optional[str]:
+def _list_etag(updated_at: Optional[datetime]) -> Optional[str]:
     """Weak ETag derived from ``lists.updated_at`` in integer milliseconds.
 
     Returns ``None`` when ``updated_at`` is missing — in that case the
@@ -26,6 +27,9 @@ def _list_etag(updated_at) -> Optional[str]:
     """
     if updated_at is None:
         return None
+    if updated_at.tzinfo is None:
+        # BSON strips tzinfo on round-trip; persisted timestamps are UTC.
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
     return f'W/"{int(updated_at.timestamp() * 1000)}"'
 
 router = APIRouter(prefix="/lists", tags=["lists"])
@@ -78,6 +82,9 @@ async def _serialize_list_with_items_count(db, list_doc: dict, user_id: str) -> 
     response["completed"] = response.get("completed", False)
     response["items_count"] = await db.items.count_documents(
         {"list_id": response["id"], "user_id": user_id}
+    )
+    response["unpurchased_items_count"] = await db.items.count_documents(
+        {"list_id": response["id"], "user_id": user_id, "purchased": {"$ne": True}}
     )
     return response
 
@@ -141,6 +148,7 @@ async def create_list(
     response = serialize_doc(doc)
     response["completed"] = False
     response["items_count"] = 0
+    response["unpurchased_items_count"] = 0
     return response
 
 
@@ -161,6 +169,7 @@ async def get_list(
     etag = _list_etag(list_doc.get("updated_at"))
     if etag is not None:
         response.headers["ETag"] = etag
+        # TODO: handle RFC 7232 multi-value If-None-Match ("etag1, etag2") and the wildcard "*".
         if if_none_match is not None and if_none_match == etag:
             return Response(
                 status_code=status.HTTP_304_NOT_MODIFIED,
@@ -275,7 +284,7 @@ async def create_item(
 @router.post("/{list_id}/items/reorder", response_model=list[ItemOut])
 async def reorder_items(
     list_id: str,
-    payload: ReorderListItems,
+    payload: ReorderItems,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):

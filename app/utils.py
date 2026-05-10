@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import HTTPException
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 
 def utcnow() -> datetime:
@@ -24,7 +25,9 @@ def serialize_doc(doc: dict) -> dict:
     return data
 
 
-async def mark_list_touched(db, list_id: str, user_id: str, now: datetime) -> None:
+async def mark_list_touched(
+    db: AsyncIOMotorDatabase, list_id: str, user_id: str, now: datetime
+) -> None:
     """Bump ``lists.updated_at`` for the list owned by ``user_id``.
 
     Load-bearing for ``GET /lists/{list_id}`` ETag/304 correctness: every
@@ -47,5 +50,5 @@ async def mark_list_touched(db, list_id: str, user_id: str, now: datetime) -> No
     """
     await db.lists.update_one(
         {"_id": to_object_id(list_id, "list_id"), "user_id": user_id},
-        {"$set": {"updated_at": now}},
+        {"$max": {"updated_at": now}},
     )

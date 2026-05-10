@@ -89,12 +89,15 @@ class ItemOut(BaseSchema):
     updated_at: datetime
 
 
-class ReorderListItems(BaseSchema):
-    model_config = ConfigDict(extra="forbid")
-    item_ids: list[str]
+class ReorderItems(BaseSchema):
+    """Payload for endpoints that reorder a homogeneous collection of items
+    by re-emitting their full id list in the desired order.
 
+    Shared by ``POST /lists/{id}/items/reorder`` and
+    ``POST /templates/{id}/items/reorder`` — the contract is identical:
+    callers send the complete set of item ids in the new order.
+    """
 
-class ReorderTemplateItems(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     item_ids: list[str]
 

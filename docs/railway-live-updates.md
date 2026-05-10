@@ -1,23 +1,25 @@
-# Railway Live Updates Deployment Notes
+# Railway Deployment Notes — Near-Real-Time Lists
 
 ## Goal
 
-Ship v2 websocket live updates without introducing a separate realtime service.
+Surface near-real-time list updates to the client without running a separate
+realtime service. The current implementation does this with conditional GETs
+(ETag / `If-None-Match` / 304) on `GET /lists/{list_id}` rather than
+websockets — see [`conditional-get.md`](conditional-get.md) for the wire
+contract.
 
 ## Topology
 
-- Keep a single `api` Railway service.
-- Keep MongoDB as the single data source.
-- No Redis or background worker service is required for this phase.
+- Single `api` Railway service.
+- Single MongoDB data source.
+- No Redis, websocket service, or background worker required.
 
 ## Runtime Requirements
 
-MongoDB change streams are used as the live event source.
-That requires MongoDB to run as a replica set (or equivalent managed mode that supports change streams).
+Standalone MongoDB. Change streams / replica-set mode are **not** required —
+the polling path uses only `find_one` and `update_one`.
 
 ## Environment Contract
-
-The existing API environment variables remain unchanged:
 
 - `MONGO_URI`
 - `MONGO_DB`
@@ -26,7 +28,11 @@ The existing API environment variables remain unchanged:
 
 ## Rollout Checks
 
-1. Deploy API with websocket support enabled (same service and port).
-2. Confirm MongoDB deployment supports change streams.
-3. Open two sessions of the same list and verify `list.changed` events are received at `/v2/live/lists/{list_id}/ws`.
-4. Verify no additional Railway services were introduced for realtime support.
+1. Deploy the API service.
+2. `GET /lists/{list_id}` returns `200`, an `ETag: W/"…"` header, and
+   `Cache-Control: private, no-cache`.
+3. Repeat the GET with `If-None-Match: <captured-etag>` and confirm `304 Not
+   Modified` with no body, the same ETag echoed, and the same Cache-Control.
+4. Mutate the list (`POST /lists/{id}/items`) and repeat the conditional GET
+   — confirm `200` with a different ETag.
+5. No additional Railway services were introduced for realtime support.
