@@ -1,5 +1,7 @@
 # Shoplist API
 
+[![Backend tests](https://github.com/00dav00/chopin-list-be/actions/workflows/be.yml/badge.svg)](https://github.com/00dav00/chopin-list-be/actions/workflows/be.yml)
+
 FastAPI + MongoDB backend that authenticates every request with a Google ID token.
 
 ## Environment
