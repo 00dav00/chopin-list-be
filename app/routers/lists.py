@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Annotated, Optional, Union
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pymongo import UpdateOne
 
 from ..auth import get_current_user
@@ -11,7 +13,20 @@ from ..schemas import (
     ListUpdate,
     ReorderListItems,
 )
-from ..utils import serialize_doc, to_object_id, utcnow
+from ..utils import mark_list_touched, serialize_doc, to_object_id, utcnow
+
+CACHE_CONTROL_PRIVATE_NO_CACHE = "private, no-cache"
+
+
+def _list_etag(updated_at) -> Optional[str]:
+    """Weak ETag derived from ``lists.updated_at`` in integer milliseconds.
+
+    Returns ``None`` when ``updated_at`` is missing — in that case the
+    endpoint omits the ``ETag`` header entirely and always returns 200.
+    """
+    if updated_at is None:
+        return None
+    return f'W/"{int(updated_at.timestamp() * 1000)}"'
 
 router = APIRouter(prefix="/lists", tags=["lists"])
 LIST_COMPLETED_MUTATION_MESSAGE = (
@@ -129,11 +144,31 @@ async def create_list(
     return response
 
 
-@router.get("/{list_id}", response_model=ListOut)
+@router.get(
+    "/{list_id}",
+    response_model=ListOut,
+    responses={304: {"description": "Not modified"}},
+)
 async def get_list(
-    list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
+    list_id: str,
+    response: Response,
+    if_none_match: Annotated[Optional[str], Header(alias="If-None-Match")] = None,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
 ):
     list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    response.headers["Cache-Control"] = CACHE_CONTROL_PRIVATE_NO_CACHE
+    etag = _list_etag(list_doc.get("updated_at"))
+    if etag is not None:
+        response.headers["ETag"] = etag
+        if if_none_match is not None and if_none_match == etag:
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": CACHE_CONTROL_PRIVATE_NO_CACHE,
+                },
+            )
     return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
 
 
@@ -233,10 +268,7 @@ async def create_item(
     }
     result = await db.items.insert_one(doc)
     doc["_id"] = result.inserted_id
-    await db.lists.update_one(
-        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
-        {"$set": {"updated_at": now}},
-    )
+    await mark_list_touched(db, list_id, current_user["id"], now)
     return serialize_doc(doc)
 
 
@@ -280,10 +312,7 @@ async def reorder_items(
         )
     if operations:
         await db.items.bulk_write(operations)
-    await db.lists.update_one(
-        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
-        {"$set": {"updated_at": now}},
-    )
+    await mark_list_touched(db, list_id, current_user["id"], now)
 
     cursor = db.items.find({"list_id": list_id, "user_id": current_user["id"]}).sort(
         [("sort_order", 1), ("created_at", 1)]

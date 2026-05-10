@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..auth import get_current_user
 from ..db import get_db
 from ..schemas import ItemOut, ItemUpdate
-from ..utils import serialize_doc, to_object_id, utcnow
+from ..utils import mark_list_touched, serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/items", tags=["items"])
 LIST_COMPLETED_MUTATION_MESSAGE = (
@@ -67,9 +67,8 @@ async def update_item(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
-    await db.lists.update_one(
-        {"_id": list_doc["_id"], "user_id": current_user["id"]},
-        {"$set": {"updated_at": updates["updated_at"]}},
+    await mark_list_touched(
+        db, item_doc["list_id"], current_user["id"], updates["updated_at"]
     )
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
     return serialize_doc(item_doc)
@@ -92,9 +91,8 @@ async def toggle_item(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]},
         {"$set": updates},
     )
-    await db.lists.update_one(
-        {"_id": list_doc["_id"], "user_id": current_user["id"]},
-        {"$set": {"updated_at": updates["updated_at"]}},
+    await mark_list_touched(
+        db, item_doc["list_id"], current_user["id"], updates["updated_at"]
     )
     item_doc = await _get_item_or_404(db, item_id, current_user["id"])
     return serialize_doc(item_doc)
@@ -110,8 +108,5 @@ async def delete_item(
     await db.items.delete_one(
         {"_id": to_object_id(item_id, "item_id"), "user_id": current_user["id"]}
     )
-    await db.lists.update_one(
-        {"_id": list_doc["_id"], "user_id": current_user["id"]},
-        {"$set": {"updated_at": utcnow()}},
-    )
+    await mark_list_touched(db, item_doc["list_id"], current_user["id"], utcnow())
     return None

@@ -365,6 +365,17 @@ async def create_list_from_template(
                     "updated_at": now,
                 }
             )
+        # Templates bulk-insert exception to the mark_list_touched invariant.
+        # We deliberately do NOT call mark_list_touched here. Rationale:
+        # the list_doc itself was just inserted above with updated_at = now,
+        # and these items carry the same updated_at = now timestamp. The
+        # ETag derived from lists.updated_at therefore already reflects the
+        # post-bulk-insert state. There is no concurrent viewer at create-
+        # from-template time (the user just initiated the creation and
+        # holds no prior ETag for this list). Exception holds while
+        # templates remain creation-only; revisit if a "merge template
+        # into existing list" flow is ever added, since that path would
+        # produce stale 304s for active viewers without an explicit bump.
         await db.items.insert_many(item_docs)
 
     response = serialize_doc(list_doc)
