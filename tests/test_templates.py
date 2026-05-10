@@ -252,3 +252,39 @@ async def test_create_list_from_template_copies_items(client, db):
     assert len(stored_items) == 2
     stored_names = sorted(item["name"] for item in stored_items)
     assert stored_names == ["Apples", "Bananas"]
+
+
+@pytest.mark.asyncio
+async def test_create_list_from_template_skips_mark_list_touched(client):
+    """Templates bulk-insert exception to the conditional-GET contract.
+
+    The create-from-template path inserts the list with ``updated_at=now``
+    and bulk-inserts items also with ``updated_at=now``. We deliberately
+    do NOT call ``mark_list_touched`` after the bulk-insert; the list's
+    ``updated_at`` reflects the post-bulk-insert state because list and
+    items share the same ``now`` timestamp. The first GET returns a
+    usable ETag that 304s correctly until the next item write.
+    """
+    template = await create_template(client, name="Staples")
+    item_resp = await client.post(
+        f"/templates/{template['id']}/items",
+        json={"name": "Bread", "sort_order": 0},
+    )
+    assert item_resp.status_code == 201
+
+    create_resp = await client.post(
+        f"/templates/{template['id']}/create-list",
+        json={"name": "From staples"},
+    )
+    assert create_resp.status_code == 201
+    listing = create_resp.json()
+
+    initial = await client.get(f"/lists/{listing['id']}")
+    assert initial.status_code == 200
+    etag = initial.headers["etag"]
+
+    cond = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": etag},
+    )
+    assert cond.status_code == 304

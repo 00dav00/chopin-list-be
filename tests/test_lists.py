@@ -1,6 +1,14 @@
+from datetime import datetime, timedelta, timezone
+
 from bson import ObjectId
 import pytest
 import time_machine
+
+from app.routers.lists import _list_etag
+from app.utils import mark_list_touched
+
+
+CACHE_CONTROL = "private, no-cache"
 
 
 def _strip_utc_suffix(value: str) -> str:
@@ -384,3 +392,93 @@ async def test_reorder_items_rejects_duplicate_ids(client):
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Item ids must not contain duplicates."
+
+
+# ---------------------------------------------------------------------------
+# ETag / 304 / Cache-Control on GET /lists/{list_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_list_emits_etag_and_cache_control_on_200(client):
+    listing = await create_list(client)
+    response = await client.get(f"/lists/{listing['id']}")
+    assert response.status_code == 200
+    etag = response.headers.get("etag")
+    assert etag is not None
+    assert etag.startswith('W/"')
+    assert etag.endswith('"')
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_304_when_if_none_match_matches(client):
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    etag = initial.headers["etag"]
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": etag},
+    )
+    assert response.status_code == 304
+    assert response.content == b""
+    assert response.headers.get("etag") == etag
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_200_after_item_write_bumps_updated_at(client):
+    """Item write through mark_list_touched bumps updated_at → ETag changes."""
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    old_etag = initial.headers["etag"]
+
+    await create_item(client, listing["id"], name="Milk")
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": old_etag},
+    )
+    assert response.status_code == 200
+    new_etag = response.headers["etag"]
+    assert new_etag != old_etag
+
+
+@pytest.mark.asyncio
+async def test_get_list_falls_through_to_200_on_malformed_if_none_match(client):
+    listing = await create_list(client)
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": "not-a-real-etag"},
+    )
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_200_when_if_none_match_matches_older_updated_at(
+    client, db, current_user
+):
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    old_etag = initial.headers["etag"]
+
+    later = datetime.now(timezone.utc) + timedelta(seconds=60)
+    await mark_list_touched(db, listing["id"], current_user["id"], later)
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": old_etag},
+    )
+    assert response.status_code == 200
+    assert response.headers["etag"] != old_etag
+
+
+def test_list_etag_returns_none_when_updated_at_is_none():
+    """Defensive: ``_list_etag(None)`` → ``None`` so the endpoint omits
+    the ``ETag`` header entirely. Reachable end-to-end only if the schema
+    is ever loosened to accept ``updated_at=None`` on the read model;
+    until then this tests the helper directly so the defense survives
+    refactors of the endpoint."""
+    assert _list_etag(None) is None
