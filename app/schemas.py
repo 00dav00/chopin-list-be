@@ -56,6 +56,7 @@ class ListOut(BaseSchema):
     completed: bool = False
     template_id: Optional[str] = None
     items_count: int = 0
+    unpurchased_items_count: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -88,7 +89,15 @@ class ItemOut(BaseSchema):
     updated_at: datetime
 
 
-class ReorderListItems(BaseSchema):
+class ReorderItems(BaseSchema):
+    """Payload for endpoints that reorder a homogeneous collection of items
+    by re-emitting their full id list in the desired order.
+
+    Shared by ``POST /lists/{id}/items/reorder`` and
+    ``POST /templates/{id}/items/reorder`` — the contract is identical:
+    callers send the complete set of item ids in the new order.
+    """
+
     model_config = ConfigDict(extra="forbid")
     item_ids: list[str]
 

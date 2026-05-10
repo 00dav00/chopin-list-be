@@ -164,6 +164,72 @@ async def test_delete_template_item(client, db):
 
 
 @pytest.mark.asyncio
+async def test_reorder_template_items_happy_path(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+    item_c = await create_template_item(client, created["id"], name="C", sort_order=2)
+
+    new_order = [item_c["id"], item_a["id"], item_b["id"]]
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": new_order},
+    )
+    assert response.status_code == 200
+    items = response.json()
+    assert [item["name"] for item in items] == ["C", "A", "B"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_missing_item_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"]]},  # missing item_b
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_duplicate_ids_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    item_b = await create_template_item(client, created["id"], name="B", sort_order=1)
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"], item_a["id"]]},  # duplicate
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_unknown_id_returns_400(client):
+    created = await create_template(client, name="Reorder")
+    item_a = await create_template_item(client, created["id"], name="A", sort_order=0)
+    unknown_id = str(ObjectId())
+
+    response = await client.post(
+        f"/templates/{created['id']}/items/reorder",
+        json={"item_ids": [item_a["id"], unknown_id]},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reorder_template_items_nonexistent_template_returns_404(client):
+    nonexistent_id = str(ObjectId())
+    response = await client.post(
+        f"/templates/{nonexistent_id}/items/reorder",
+        json={"item_ids": []},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_create_list_from_template_copies_items(client, db):
     items = [
         {"name": "Bananas", "sort_order": 2},
@@ -186,3 +252,39 @@ async def test_create_list_from_template_copies_items(client, db):
     assert len(stored_items) == 2
     stored_names = sorted(item["name"] for item in stored_items)
     assert stored_names == ["Apples", "Bananas"]
+
+
+@pytest.mark.asyncio
+async def test_create_list_from_template_skips_mark_list_touched(client):
+    """Templates bulk-insert exception to the conditional-GET contract.
+
+    The create-from-template path inserts the list with ``updated_at=now``
+    and bulk-inserts items also with ``updated_at=now``. We deliberately
+    do NOT call ``mark_list_touched`` after the bulk-insert; the list's
+    ``updated_at`` reflects the post-bulk-insert state because list and
+    items share the same ``now`` timestamp. The first GET returns a
+    usable ETag that 304s correctly until the next item write.
+    """
+    template = await create_template(client, name="Staples")
+    item_resp = await client.post(
+        f"/templates/{template['id']}/items",
+        json={"name": "Bread", "sort_order": 0},
+    )
+    assert item_resp.status_code == 201
+
+    create_resp = await client.post(
+        f"/templates/{template['id']}/create-list",
+        json={"name": "From staples"},
+    )
+    assert create_resp.status_code == 201
+    listing = create_resp.json()
+
+    initial = await client.get(f"/lists/{listing['id']}")
+    assert initial.status_code == 200
+    etag = initial.headers["etag"]
+
+    cond = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": etag},
+    )
+    assert cond.status_code == 304

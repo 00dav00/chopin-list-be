@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pymongo import UpdateOne
 
 from ..auth import get_current_user
 from ..db import get_db
 from ..schemas import (
     CreateListFromTemplate,
     ListOut,
+    ReorderItems,
     TemplateCreate,
     TemplateDetailOut,
     TemplateItemCreate,
@@ -271,6 +273,53 @@ async def delete_template_item(
     return None
 
 
+@router.post("/{template_id}/items/reorder", response_model=list[TemplateItemOut])
+async def reorder_template_items(
+    template_id: str,
+    payload: ReorderItems,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    await _get_template_or_404(db, template_id, current_user["id"])
+    item_ids = payload.item_ids
+    if len(item_ids) != len(set(item_ids)):
+        raise HTTPException(
+            status_code=400, detail="Item ids must not contain duplicates."
+        )
+
+    existing_items = await db.template_items.find(
+        {"template_id": template_id, "user_id": current_user["id"]}
+    ).to_list(length=None)
+    existing_item_ids = {str(item["_id"]) for item in existing_items}
+    if set(item_ids) != existing_item_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Item ids must include every item in the template exactly once.",
+        )
+
+    now = utcnow()
+    operations = []
+    for sort_order, item_id in enumerate(item_ids):
+        operations.append(
+            UpdateOne(
+                {
+                    "_id": to_object_id(item_id, "item_id"),
+                    "template_id": template_id,
+                    "user_id": current_user["id"],
+                },
+                {"$set": {"sort_order": sort_order, "updated_at": now}},
+            )
+        )
+    if operations:
+        await db.template_items.bulk_write(operations)
+
+    cursor = db.template_items.find(
+        {"template_id": template_id, "user_id": current_user["id"]}
+    ).sort("sort_order", 1)
+    docs = await cursor.to_list(length=None)
+    return [serialize_doc(doc) for doc in docs]
+
+
 @router.post(
     "/{template_id}/create-list",
     response_model=ListOut,
@@ -316,6 +365,17 @@ async def create_list_from_template(
                     "updated_at": now,
                 }
             )
+        # Templates bulk-insert exception to the mark_list_touched invariant.
+        # We deliberately do NOT call mark_list_touched here. Rationale:
+        # the list_doc itself was just inserted above with updated_at = now,
+        # and these items carry the same updated_at = now timestamp. The
+        # ETag derived from lists.updated_at therefore already reflects the
+        # post-bulk-insert state. There is no concurrent viewer at create-
+        # from-template time (the user just initiated the creation and
+        # holds no prior ETag for this list). Exception holds while
+        # templates remain creation-only; revisit if a "merge template
+        # into existing list" flow is ever added, since that path would
+        # produce stale 304s for active viewers without an explicit bump.
         await db.items.insert_many(item_docs)
 
     response = serialize_doc(list_doc)

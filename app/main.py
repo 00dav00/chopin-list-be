@@ -7,6 +7,7 @@ from .config import settings
 from .db import init_db
 from .routers import items, lists, templates, users
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()

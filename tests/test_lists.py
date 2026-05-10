@@ -1,6 +1,14 @@
+from datetime import datetime, timedelta, timezone
+
 from bson import ObjectId
 import pytest
 import time_machine
+
+from app.routers.lists import _list_etag
+from app.utils import mark_list_touched
+
+
+CACHE_CONTROL = "private, no-cache"
 
 
 def _strip_utc_suffix(value: str) -> str:
@@ -71,6 +79,20 @@ async def test_get_list_success(client):
 
 
 @pytest.mark.asyncio
+async def test_create_item_updates_parent_list_updated_at(client):
+    created = await create_list(client, name="Errands")
+
+    response = await client.post(
+        f"/lists/{created['id']}/items", json={"name": "Soap", "sort_order": 0}
+    )
+    assert response.status_code == 201
+
+    refreshed = await client.get(f"/lists/{created['id']}")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["updated_at"] != created["updated_at"]
+
+
+@pytest.mark.asyncio
 async def test_list_lists_includes_items_count(client):
     first = await create_list(client, name="One")
     second = await create_list(client, name="Two")
@@ -84,6 +106,83 @@ async def test_list_lists_includes_items_count(client):
     counts_by_id = {item["id"]: item["items_count"] for item in data}
     assert counts_by_id[first["id"]] == 2
     assert counts_by_id[second["id"]] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_out_schema_accepts_and_serialises_unpurchased_items_count():
+    from app.schemas import ListOut
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    base = {
+        "id": "abc123",
+        "user_id": "user-1",
+        "name": "Groceries",
+        "completed": False,
+        "template_id": None,
+        "items_count": 5,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    with_count = ListOut(**{**base, "unpurchased_items_count": 3})
+    assert with_count.unpurchased_items_count == 3
+    dumped = with_count.model_dump()
+    assert dumped["unpurchased_items_count"] == 3
+
+    without_count = ListOut(**base)
+    assert without_count.unpurchased_items_count is None
+    dumped_none = without_count.model_dump()
+    assert dumped_none["unpurchased_items_count"] is None
+
+    with_zero = ListOut(**{**base, "unpurchased_items_count": 0})
+    assert with_zero.unpurchased_items_count == 0
+
+
+@pytest.mark.asyncio
+async def test_list_lists_includes_unpurchased_items_count(client):
+    lst = await create_list(client, name="Shopping")
+    item_a = await create_item(client, lst["id"], name="Milk")
+    item_b = await create_item(client, lst["id"], name="Eggs")
+    await create_item(client, lst["id"], name="Bread")
+
+    # Purchase two of the three items
+    await client.post(f"/items/{item_a['id']}/toggle")
+    await client.post(f"/items/{item_b['id']}/toggle")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["items_count"] == 3
+    assert found["unpurchased_items_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_lists_unpurchased_items_count_zero_when_all_purchased(client):
+    lst = await create_list(client, name="Quick run")
+    item = await create_item(client, lst["id"], name="Salt")
+    await client.post(f"/items/{item['id']}/toggle")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["unpurchased_items_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_list_lists_unpurchased_items_count_equals_items_count_when_none_purchased(client):
+    lst = await create_list(client, name="Full basket")
+    await create_item(client, lst["id"], name="Juice")
+    await create_item(client, lst["id"], name="Yogurt")
+
+    response = await client.get("/lists")
+    assert response.status_code == 200
+    data = response.json()
+    found = next(d for d in data if d["id"] == lst["id"])
+    assert found["items_count"] == 2
+    assert found["unpurchased_items_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -293,3 +392,93 @@ async def test_reorder_items_rejects_duplicate_ids(client):
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Item ids must not contain duplicates."
+
+
+# ---------------------------------------------------------------------------
+# ETag / 304 / Cache-Control on GET /lists/{list_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_list_emits_etag_and_cache_control_on_200(client):
+    listing = await create_list(client)
+    response = await client.get(f"/lists/{listing['id']}")
+    assert response.status_code == 200
+    etag = response.headers.get("etag")
+    assert etag is not None
+    assert etag.startswith('W/"')
+    assert etag.endswith('"')
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_304_when_if_none_match_matches(client):
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    etag = initial.headers["etag"]
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": etag},
+    )
+    assert response.status_code == 304
+    assert response.content == b""
+    assert response.headers.get("etag") == etag
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_200_after_item_write_bumps_updated_at(client):
+    """Item write through mark_list_touched bumps updated_at → ETag changes."""
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    old_etag = initial.headers["etag"]
+
+    await create_item(client, listing["id"], name="Milk")
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": old_etag},
+    )
+    assert response.status_code == 200
+    new_etag = response.headers["etag"]
+    assert new_etag != old_etag
+
+
+@pytest.mark.asyncio
+async def test_get_list_falls_through_to_200_on_malformed_if_none_match(client):
+    listing = await create_list(client)
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": "not-a-real-etag"},
+    )
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == CACHE_CONTROL
+
+
+@pytest.mark.asyncio
+async def test_get_list_returns_200_when_if_none_match_matches_older_updated_at(
+    client, db, current_user
+):
+    listing = await create_list(client)
+    initial = await client.get(f"/lists/{listing['id']}")
+    old_etag = initial.headers["etag"]
+
+    later = datetime.now(timezone.utc) + timedelta(seconds=60)
+    await mark_list_touched(db, listing["id"], current_user["id"], later)
+
+    response = await client.get(
+        f"/lists/{listing['id']}",
+        headers={"If-None-Match": old_etag},
+    )
+    assert response.status_code == 200
+    assert response.headers["etag"] != old_etag
+
+
+def test_list_etag_returns_none_when_updated_at_is_none():
+    """Defensive: ``_list_etag(None)`` → ``None`` so the endpoint omits
+    the ``ETag`` header entirely. Reachable end-to-end only if the schema
+    is ever loosened to accept ``updated_at=None`` on the read model;
+    until then this tests the helper directly so the defense survives
+    refactors of the endpoint."""
+    assert _list_etag(None) is None

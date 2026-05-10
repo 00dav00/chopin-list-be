@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pymongo import UpdateOne
 
 from ..auth import get_current_user
@@ -9,9 +12,25 @@ from ..schemas import (
     ListCreate,
     ListOut,
     ListUpdate,
-    ReorderListItems,
+    ReorderItems,
 )
-from ..utils import serialize_doc, to_object_id, utcnow
+from ..utils import mark_list_touched, serialize_doc, to_object_id, utcnow
+
+CACHE_CONTROL_PRIVATE_NO_CACHE = "private, no-cache"
+
+
+def _list_etag(updated_at: Optional[datetime]) -> Optional[str]:
+    """Weak ETag derived from ``lists.updated_at`` in integer milliseconds.
+
+    Returns ``None`` when ``updated_at`` is missing — in that case the
+    endpoint omits the ``ETag`` header entirely and always returns 200.
+    """
+    if updated_at is None:
+        return None
+    if updated_at.tzinfo is None:
+        # BSON strips tzinfo on round-trip; persisted timestamps are UTC.
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return f'W/"{int(updated_at.timestamp() * 1000)}"'
 
 router = APIRouter(prefix="/lists", tags=["lists"])
 LIST_COMPLETED_MUTATION_MESSAGE = (
@@ -39,6 +58,17 @@ async def _get_items_count_by_list_ids(db, list_ids: list[str], user_id: str) ->
     return {row["_id"]: row["count"] for row in grouped}
 
 
+async def _get_unpurchased_items_count_by_list_ids(db, list_ids: list[str], user_id: str) -> dict[str, int]:
+    if not list_ids:
+        return {}
+    pipeline = [
+        {"$match": {"user_id": user_id, "list_id": {"$in": list_ids}, "purchased": {"$ne": True}}},
+        {"$group": {"_id": "$list_id", "count": {"$sum": 1}}},
+    ]
+    grouped = await db.items.aggregate(pipeline).to_list(length=None)
+    return {row["_id"]: row["count"] for row in grouped}
+
+
 def _ensure_list_is_active(list_doc: dict) -> None:
     if list_doc.get("completed", False):
         raise HTTPException(
@@ -53,6 +83,9 @@ async def _serialize_list_with_items_count(db, list_doc: dict, user_id: str) -> 
     response["items_count"] = await db.items.count_documents(
         {"list_id": response["id"], "user_id": user_id}
     )
+    response["unpurchased_items_count"] = await db.items.count_documents(
+        {"list_id": response["id"], "user_id": user_id, "purchased": {"$ne": True}}
+    )
     return response
 
 
@@ -65,11 +98,16 @@ async def list_lists(current_user=Depends(get_current_user), db=Depends(get_db))
     response = [serialize_doc(doc) for doc in docs]
     for doc in response:
         doc["completed"] = doc.get("completed", False)
+    list_ids = [doc["id"] for doc in response]
     items_count_by_list_id = await _get_items_count_by_list_ids(
-        db, [doc["id"] for doc in response], current_user["id"]
+        db, list_ids, current_user["id"]
+    )
+    unpurchased_items_count_by_list_id = await _get_unpurchased_items_count_by_list_ids(
+        db, list_ids, current_user["id"]
     )
     for doc in response:
         doc["items_count"] = items_count_by_list_id.get(doc["id"], 0)
+        doc["unpurchased_items_count"] = unpurchased_items_count_by_list_id.get(doc["id"], 0)
     return response
 
 
@@ -110,14 +148,36 @@ async def create_list(
     response = serialize_doc(doc)
     response["completed"] = False
     response["items_count"] = 0
+    response["unpurchased_items_count"] = 0
     return response
 
 
-@router.get("/{list_id}", response_model=ListOut)
+@router.get(
+    "/{list_id}",
+    response_model=ListOut,
+    responses={304: {"description": "Not modified"}},
+)
 async def get_list(
-    list_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
+    list_id: str,
+    response: Response,
+    if_none_match: Annotated[Optional[str], Header(alias="If-None-Match")] = None,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
 ):
     list_doc = await _get_list_or_404(db, list_id, current_user["id"])
+    response.headers["Cache-Control"] = CACHE_CONTROL_PRIVATE_NO_CACHE
+    etag = _list_etag(list_doc.get("updated_at"))
+    if etag is not None:
+        response.headers["ETag"] = etag
+        # TODO: handle RFC 7232 multi-value If-None-Match ("etag1, etag2") and the wildcard "*".
+        if if_none_match is not None and if_none_match == etag:
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": CACHE_CONTROL_PRIVATE_NO_CACHE,
+                },
+            )
     return await _serialize_list_with_items_count(db, list_doc, current_user["id"])
 
 
@@ -217,13 +277,14 @@ async def create_item(
     }
     result = await db.items.insert_one(doc)
     doc["_id"] = result.inserted_id
+    await mark_list_touched(db, list_id, current_user["id"], now)
     return serialize_doc(doc)
 
 
 @router.post("/{list_id}/items/reorder", response_model=list[ItemOut])
 async def reorder_items(
     list_id: str,
-    payload: ReorderListItems,
+    payload: ReorderItems,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -260,10 +321,7 @@ async def reorder_items(
         )
     if operations:
         await db.items.bulk_write(operations)
-    await db.lists.update_one(
-        {"_id": to_object_id(list_id, "list_id"), "user_id": current_user["id"]},
-        {"$set": {"updated_at": now}},
-    )
+    await mark_list_touched(db, list_id, current_user["id"], now)
 
     cursor = db.items.find({"list_id": list_id, "user_id": current_user["id"]}).sort(
         [("sort_order", 1), ("created_at", 1)]

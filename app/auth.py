@@ -19,6 +19,10 @@ async def get_current_user(
     if not token:
         raise HTTPException(status_code=401, detail="Missing Google ID token.")
 
+    return await authenticate_google_token(token, db)
+
+
+async def authenticate_google_token(token: str, db) -> dict:
     try:
         id_info = id_token.verify_oauth2_token(
             token,

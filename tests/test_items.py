@@ -8,8 +8,8 @@ async def create_list(client, name="List"):
     return response.json()
 
 
-async def create_item(client, list_id, name="Milk", qty=1):
-    payload = {"name": name, "qty": qty}
+async def create_item(client, list_id, name="Milk", qty=1, sort_order=0):
+    payload = {"name": name, "qty": qty, "sort_order": sort_order}
     response = await client.post(f"/lists/{list_id}/items", json=payload)
     assert response.status_code == 201
     return response.json()
@@ -91,3 +91,76 @@ async def test_delete_item(client, db):
 
     stored = await db.items.find_one({"_id": ObjectId(created_item["id"])})
     assert stored is None
+
+
+# ---------------------------------------------------------------------------
+# Each item-mutation path must bump the parent list's ETag (via
+# mark_list_touched). These guard the conditional-GET contract on
+# GET /lists/{id}; the contract itself is exercised in test_lists.py.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_item_delete_bumps_etag(client):
+    listing = await create_list(client)
+    item = await create_item(client, listing["id"], name="Milk")
+    pre = await client.get(f"/lists/{listing['id']}")
+    old_etag = pre.headers["etag"]
+
+    response = await client.delete(f"/items/{item['id']}")
+    assert response.status_code == 204
+
+    post = await client.get(f"/lists/{listing['id']}")
+    assert post.status_code == 200
+    assert post.headers["etag"] != old_etag
+
+
+@pytest.mark.asyncio
+async def test_item_toggle_bumps_etag(client):
+    listing = await create_list(client)
+    item = await create_item(client, listing["id"], name="Milk")
+    pre = await client.get(f"/lists/{listing['id']}")
+    old_etag = pre.headers["etag"]
+
+    response = await client.post(f"/items/{item['id']}/toggle")
+    assert response.status_code == 200
+
+    post = await client.get(f"/lists/{listing['id']}")
+    assert post.status_code == 200
+    assert post.headers["etag"] != old_etag
+
+
+@pytest.mark.asyncio
+async def test_item_update_bumps_etag(client):
+    listing = await create_list(client)
+    item = await create_item(client, listing["id"], name="Milk")
+    pre = await client.get(f"/lists/{listing['id']}")
+    old_etag = pre.headers["etag"]
+
+    response = await client.patch(
+        f"/items/{item['id']}", json={"name": "Whole Milk"}
+    )
+    assert response.status_code == 200
+
+    post = await client.get(f"/lists/{listing['id']}")
+    assert post.status_code == 200
+    assert post.headers["etag"] != old_etag
+
+
+@pytest.mark.asyncio
+async def test_item_reorder_bumps_etag(client):
+    listing = await create_list(client)
+    a = await create_item(client, listing["id"], name="Milk", sort_order=0)
+    b = await create_item(client, listing["id"], name="Eggs", sort_order=1)
+    pre = await client.get(f"/lists/{listing['id']}")
+    old_etag = pre.headers["etag"]
+
+    response = await client.post(
+        f"/lists/{listing['id']}/items/reorder",
+        json={"item_ids": [b["id"], a["id"]]},
+    )
+    assert response.status_code == 200
+
+    post = await client.get(f"/lists/{listing['id']}")
+    assert post.status_code == 200
+    assert post.headers["etag"] != old_etag
