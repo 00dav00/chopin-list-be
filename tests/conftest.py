@@ -12,7 +12,10 @@ TEST_DB_NAME = os.environ.get("TEST_DB_NAME") or f"shoplist_test_{uuid.uuid4().h
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
 os.environ.setdefault("MONGO_URI", "mongodb://localhost:27017")
 os.environ.setdefault("MONGO_DB", TEST_DB_NAME)
-os.environ.setdefault("CHOPIN_LIST_FE_URL", "http://chopin-test-fe.invalid")
+# Force the FE origin to a fixed sentinel so `test_main.py` can assert against
+# a literal. `setdefault` is not enough here: CI exports CHOPIN_LIST_FE_URL,
+# which would otherwise win and break the CORS preflight contract test.
+os.environ["CHOPIN_LIST_FE_URL"] = "http://chopin-test-fe.invalid"
 
 from app.auth import get_current_user  # noqa: E402
 from app.db import get_db  # noqa: E402
