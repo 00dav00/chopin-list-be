@@ -5,6 +5,7 @@ from pymongo import ReturnDocument
 
 from .config import settings
 from .db import get_db
+from .notifications import dispatch_new_user_notification
 from .utils import serialize_doc, utcnow
 
 
@@ -60,6 +61,27 @@ async def authenticate_google_token(token: str, db) -> dict:
         return_document=ReturnDocument.AFTER,
     )
     user_doc.setdefault("admin", False)
+
+    # First-ever sign-in: notify admins that someone is waiting for approval.
+    # `created_at` and `last_login_at` are both written from the same `now` in
+    # the single upsert above, so BSON truncates them identically and they
+    # compare exactly equal on insert -- and never again, because every re-auth
+    # advances `last_login_at` alone. Do NOT compare `created_at` against a
+    # freshly computed `utcnow()`: that value is microsecond-precision while the
+    # stored one is milliseconds, so the comparison is false even on insert and
+    # the notification silently never fires.
+    #
+    # Known limitation: a re-auth landing in the same millisecond as the insert
+    # would misfire. That needs sub-millisecond concurrency on one google_sub;
+    # documented rather than engineered around.
+    #
+    # Dispatch happens before the 403 below and is fire-and-forget -- it must
+    # not delay, alter, or fail this request. See app/notifications.py for why
+    # this is not a FastAPI BackgroundTask.
+    created_at = user_doc.get("created_at")
+    if created_at is not None and created_at == user_doc.get("last_login_at"):
+        dispatch_new_user_notification(user_doc.get("name"), user_doc.get("email"))
+
     if not user_doc.get("approved", True):
         raise HTTPException(status_code=403, detail="Account pending approval.")
 
