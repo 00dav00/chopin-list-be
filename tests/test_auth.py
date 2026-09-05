@@ -188,13 +188,10 @@ async def test_get_current_user_ignores_admin_flag_from_google_payload(db, monke
 
 
 # ---------------------------------------------------------------------------
-# New-user admin notification -- trigger half. The notification module's own
-# behaviour is covered in tests/test_notifications.py (AGENTS.md: one test file
-# per module).
-#
-# These drive the real Mongo upsert rather than a hand-built document on
-# purpose: the discriminator compares two stored timestamps, and a test that
-# fabricates the doc would pass against a broken comparison and prove nothing.
+# New-user admin notification -- trigger half. The module's own behaviour is in
+# tests/test_notifications.py (AGENTS.md: one test file per module). These drive
+# the real Mongo upsert: the discriminator compares two stored timestamps, so a
+# fabricated document would pass against a broken comparison and prove nothing.
 # ---------------------------------------------------------------------------
 
 
@@ -250,9 +247,8 @@ async def test_reauthentication_does_not_dispatch_admin_notification(
     )
 
     # Both timestamps are millisecond-truncated by BSON, so a re-auth inside the
-    # same millisecond as the insert would misfire -- the documented limitation
-    # in app/auth.py. Step past it so this asserts the discriminator rather than
-    # the clock.
+    # same millisecond as the insert would misfire. Step past it so this asserts
+    # the discriminator rather than the clock.
     await asyncio.sleep(0.01)
 
     # They come back. No second notification.

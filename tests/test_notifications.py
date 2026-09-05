@@ -106,10 +106,9 @@ async def test_missing_smtp_config_outside_dry_run_logs_loudly_and_does_not_send
     # ...and must read differently from a transient relay failure. One means
     # "fix the deploy", the other means "ignore, the next signup retries".
     assert "Admin notification failed" not in caplog.text
-    # Reaching this line at all is the assertion that it never raises: on the
-    # create_task path a raise is contained, but if this check ever migrates
-    # into the request path it would turn the 403 into a 500 -- the exact
-    # failure AC3 exists to prevent.
+    # Reaching this line at all is the assertion that it never raises: if this
+    # check ever migrates into the request path, a raise here would turn the
+    # pending-approval 403 into a 500.
 
 
 @pytest.mark.asyncio

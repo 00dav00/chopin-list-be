@@ -16,14 +16,10 @@ class Settings(BaseSettings):
         alias="CHOPIN_LIST_FE_URL",
     )
 
-    # Admin-notification email. Declared optional-absent rather than required:
-    # this class is instantiated at module scope (below), so a required field
-    # breaks every import -- including tests/conftest.py -- for anyone without
-    # SMTP credentials. `None` here means "not configured", not an invented
-    # fallback; AGENTS.md's no-defaults rule targets fabricated values (a
-    # default host, a default 587), and the dry-run requirement is the explicit
-    # request that rule carves out. The send path logs loudly when these are
-    # absent outside dry-run, so a misconfiguration is never a silent no-send.
+    # Admin-notification email. Optional-absent rather than required: Settings()
+    # is instantiated at module scope below, so a required field breaks every
+    # import including tests/conftest.py. `None` means "not configured", not an
+    # invented fallback; the send path logs loudly when these are absent.
     smtp_host: str | None = Field(default=None, alias="SMTP_HOST")
     smtp_port: int | None = Field(default=None, alias="SMTP_PORT")
     # "implicit" | "starttls" | "none". Stated rather than inferred from the

@@ -1,25 +1,8 @@
 """Admin notification email for new access requests.
 
-Failure stance: **email is notification, not invariant.** Nothing in this module
-may change the outcome of the request that triggered it. A new user's first
-authenticated request always terminates in ``403 Account pending approval`` by
-design; turning that into a 5xx because an SMTP relay hiccuped would be hostile,
-so every failure here is logged and swallowed.
-
-Dispatch is deliberately ``asyncio.create_task`` and **not** FastAPI's
-``BackgroundTasks``. Background tasks are attached to a response after the
-endpoint returns, and are dropped when a dependency raises. Authentication runs
-as a dependency (``app.auth.get_current_user``) and the first-time-user path
-always raises, so a ``BackgroundTasks`` send would never fire for exactly the
-case this module exists to serve -- and would fail only in production, since a
-test that patches the send at module level passes either way.
-
-Provider-agnostic by construction: any SMTP relay (Brevo, SMTP2GO, SES, Gmail)
-works through the same env vars. The one provider-shaped difference, TLS mode,
-is stated per environment in ``SMTP_TLS`` rather than inferred from the port.
-Naming the mode leaves the code just as vendor-blind as deriving it did, and it
-lets a local fake relay that speaks no TLS at all be configured rather than
-special-cased.
+Email is notification, not invariant: every failure here is logged and
+swallowed so it can never change the outcome of the request that triggered it.
+Provider-agnostic over plain SMTP; TLS mode is named in ``SMTP_TLS``.
 """
 
 import asyncio
@@ -39,14 +22,10 @@ logger = logging.getLogger(__name__)
 # minute.
 SMTP_TIMEOUT_SECONDS = 10.0
 
-# SMTP_TLS -> (use_tls, start_tls) for aiosmtplib. Previously derived from the
-# port (465 implicit, everything else STARTTLS), which guessed wrong for the two
-# cases that matter: a relay on a nonstandard port, and a local fake relay
-# offering no TLS at all -- against which an assumed STARTTLS fails with
-# "STARTTLS extension not supported by server".
-#
-# "none" is plaintext and belongs only to local development. Do not pair it with
-# SMTP_USER/SMTP_PASSWORD: those credentials would cross the wire in the clear.
+# SMTP_TLS -> (use_tls, start_tls) for aiosmtplib. Named, not derived from the
+# port: deriving guessed wrong for a relay on a nonstandard port and for a local
+# fake relay offering no TLS at all. "none" is plaintext and local-only -- never
+# pair it with SMTP_USER/SMTP_PASSWORD, which would cross the wire in the clear.
 TLS_MODES = {
     "implicit": (True, False),  # TLS from the first byte; conventionally 465
     "starttls": (False, True),  # plaintext connect, then upgrade; 587 / 2525
@@ -187,6 +166,10 @@ def dispatch_new_user_notification(
 
     Callers are on the auth path and must not be delayed or failed by this.
     """
+    # Not BackgroundTasks: those attach to a response and are dropped when a
+    # dependency raises. Auth runs as a dependency and a first-time user's
+    # request always raises 403, so a BackgroundTasks send would never fire for
+    # the one case this exists to serve -- and would fail only in production.
     try:
         task = asyncio.create_task(send_new_user_notification(name, email))
     except RuntimeError:
