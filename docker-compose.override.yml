@@ -10,3 +10,16 @@ services:
       - .:/app:rw
       - ./tests:/app/tests:ro
       - ./pytest.ini:/app/pytest.ini:ro
+    environment:
+      # .env carries SMTP_HOST=localhost so a host-run uvicorn reaches the
+      # published port; inside the network it is the service name. Same split
+      # as MONGO_URI in docker-compose.yml.
+      SMTP_HOST: mailpit
+
+  # Local fake inbox: captures mail instead of delivering it, and serves a web
+  # UI on http://localhost:8025. Speaks plaintext SMTP only, hence SMTP_TLS=none.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+      - "1025:1025"

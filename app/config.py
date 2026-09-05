@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # absent outside dry-run, so a misconfiguration is never a silent no-send.
     smtp_host: str | None = Field(default=None, alias="SMTP_HOST")
     smtp_port: int | None = Field(default=None, alias="SMTP_PORT")
+    # "implicit" | "starttls" | "none". Stated rather than inferred from the
+    # port: see app/notifications.py TLS_MODES. Absent is a misconfiguration
+    # outside dry-run, not a mode -- the send path refuses and says so.
+    smtp_tls: str | None = Field(default=None, alias="SMTP_TLS")
     smtp_user: str | None = Field(default=None, alias="SMTP_USER")
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     mail_from: str | None = Field(default=None, alias="MAIL_FROM")

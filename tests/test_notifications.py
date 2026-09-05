@@ -17,6 +17,7 @@ def configured(monkeypatch):
     monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
     monkeypatch.setattr(notifications.settings, "smtp_host", "smtp.example.com")
     monkeypatch.setattr(notifications.settings, "smtp_port", 587)
+    monkeypatch.setattr(notifications.settings, "smtp_tls", "starttls")
     monkeypatch.setattr(notifications.settings, "smtp_user", "relay-user")
     monkeypatch.setattr(notifications.settings, "smtp_password", "relay-password")
     monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
@@ -87,6 +88,7 @@ async def test_missing_smtp_config_outside_dry_run_logs_loudly_and_does_not_send
     monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
     monkeypatch.setattr(notifications.settings, "smtp_host", None)
     monkeypatch.setattr(notifications.settings, "smtp_port", None)
+    monkeypatch.setattr(notifications.settings, "smtp_tls", None)
     monkeypatch.setattr(notifications.settings, "mail_from", None)
     monkeypatch.setattr(notifications.settings, "mail_admin_to", "admin@example.com")
 
@@ -98,6 +100,9 @@ async def test_missing_smtp_config_outside_dry_run_logs_loudly_and_does_not_send
     # -- a silent no-send is indistinguishable from "nobody signed up".
     assert "SMTP_HOST" in caplog.text
     assert "MAIL_FROM" in caplog.text
+    # Absent SMTP_TLS is a misconfiguration, not an unstated default: a deploy
+    # that forgets it must be told, not quietly given a guessed mode.
+    assert "SMTP_TLS" in caplog.text
     # ...and must read differently from a transient relay failure. One means
     # "fix the deploy", the other means "ignore, the next signup retries".
     assert "Admin notification failed" not in caplog.text
@@ -123,20 +128,59 @@ async def test_smtp_failure_is_swallowed_and_logged(configured, monkeypatch, cap
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "port,expect_implicit_tls",
-    [(465, True), (587, False)],
+    "mode,expect_use_tls,expect_start_tls",
+    [
+        ("implicit", True, False),
+        ("starttls", False, True),
+        # Plaintext is a real, reachable mode -- a local fake relay offers no
+        # TLS, and an assumed STARTTLS against one fails outright.
+        ("none", False, False),
+    ],
 )
-async def test_tls_mode_is_derived_from_port(
-    configured, sent, monkeypatch, port, expect_implicit_tls
+async def test_tls_mode_comes_from_config_not_the_port(
+    configured, sent, monkeypatch, mode, expect_use_tls, expect_start_tls
 ):
-    # The only provider-shaped difference this code is allowed to know about.
-    monkeypatch.setattr(notifications.settings, "smtp_port", port)
+    monkeypatch.setattr(notifications.settings, "smtp_tls", mode)
+    # Pinned to a port whose convention contradicts every mode under test, so a
+    # regression back to port-derived TLS fails here instead of passing by luck.
+    monkeypatch.setattr(notifications.settings, "smtp_port", 2525)
 
     await notifications.send_new_user_notification("New Person", "new@example.com")
 
     _, kwargs = sent[0]
-    assert kwargs["use_tls"] is expect_implicit_tls
-    assert kwargs["start_tls"] is not expect_implicit_tls
+    assert kwargs["use_tls"] is expect_use_tls
+    assert kwargs["start_tls"] is expect_start_tls
+
+
+@pytest.mark.asyncio
+async def test_tls_mode_is_case_and_whitespace_insensitive(
+    configured, sent, monkeypatch
+):
+    monkeypatch.setattr(notifications.settings, "smtp_tls", "  STARTTLS ")
+
+    await notifications.send_new_user_notification("New Person", "new@example.com")
+
+    _, kwargs = sent[0]
+    assert kwargs["start_tls"] is True
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_tls_mode_logs_loudly_and_does_not_send(
+    configured, sent, monkeypatch, caplog
+):
+    monkeypatch.setattr(notifications.settings, "smtp_tls", "ssl")
+
+    with caplog.at_level(logging.ERROR):
+        await notifications.send_new_user_notification("New Person", "new@example.com")
+
+    assert sent == []
+    # Must name the offending value and the valid set: a typo is fixed by
+    # editing config, so guessing a mode would hide the one actionable fact.
+    assert "SMTP_TLS" in caplog.text
+    assert "'ssl'" in caplog.text
+    assert "starttls" in caplog.text
+    # Not a transient relay failure -- retrying never fixes a typo.
+    assert "Admin notification failed" not in caplog.text
 
 
 @pytest.mark.asyncio

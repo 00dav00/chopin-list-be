@@ -15,8 +15,11 @@ case this module exists to serve -- and would fail only in production, since a
 test that patches the send at module level passes either way.
 
 Provider-agnostic by construction: any SMTP relay (Brevo, SMTP2GO, SES, Gmail)
-works through the same env vars. The only provider-shaped difference is TLS
-mode, derived from the port rather than configured separately.
+works through the same env vars. The one provider-shaped difference, TLS mode,
+is stated per environment in ``SMTP_TLS`` rather than inferred from the port.
+Naming the mode leaves the code just as vendor-blind as deriving it did, and it
+lets a local fake relay that speaks no TLS at all be configured rather than
+special-cased.
 """
 
 import asyncio
@@ -36,10 +39,19 @@ logger = logging.getLogger(__name__)
 # minute.
 SMTP_TIMEOUT_SECONDS = 10.0
 
-# 465 is implicit TLS, everything else (conventionally 587) is STARTTLS. This is
-# an RFC-era convention rather than a vendor quirk, so deriving it keeps the
-# "code must not know which provider is behind SMTP_HOST" line intact.
-IMPLICIT_TLS_PORT = 465
+# SMTP_TLS -> (use_tls, start_tls) for aiosmtplib. Previously derived from the
+# port (465 implicit, everything else STARTTLS), which guessed wrong for the two
+# cases that matter: a relay on a nonstandard port, and a local fake relay
+# offering no TLS at all -- against which an assumed STARTTLS fails with
+# "STARTTLS extension not supported by server".
+#
+# "none" is plaintext and belongs only to local development. Do not pair it with
+# SMTP_USER/SMTP_PASSWORD: those credentials would cross the wire in the clear.
+TLS_MODES = {
+    "implicit": (True, False),  # TLS from the first byte; conventionally 465
+    "starttls": (False, True),  # plaintext connect, then upgrade; 587 / 2525
+    "none": (False, False),  # no encryption; local fake relays only
+}
 
 # Hash-based routing on the frontend (svelte-spa-router), so the emailed link
 # must carry the "#". This is the FE route, NOT the backend API path.
@@ -88,22 +100,29 @@ def _missing_config() -> list[str]:
     required = {
         "SMTP_HOST": settings.smtp_host,
         "SMTP_PORT": settings.smtp_port,
+        "SMTP_TLS": settings.smtp_tls,
         "MAIL_FROM": settings.mail_from,
         "MAIL_ADMIN_TO": settings.mail_admin_to,
     }
     return sorted(name for name, value in required.items() if not value)
 
 
-async def _deliver(message: EmailMessage) -> None:
-    port = settings.smtp_port
+def _tls_mode() -> Optional[str]:
+    """The configured mode, normalized, or None if it names no known mode."""
+    mode = (settings.smtp_tls or "").strip().lower()
+    return mode if mode in TLS_MODES else None
+
+
+async def _deliver(message: EmailMessage, tls_mode: str) -> None:
+    use_tls, start_tls = TLS_MODES[tls_mode]
     await aiosmtplib.send(
         message,
         hostname=settings.smtp_host,
-        port=port,
+        port=settings.smtp_port,
         username=settings.smtp_user or None,
         password=settings.smtp_password or None,
-        use_tls=port == IMPLICIT_TLS_PORT,
-        start_tls=port != IMPLICIT_TLS_PORT,
+        use_tls=use_tls,
+        start_tls=start_tls,
         timeout=SMTP_TIMEOUT_SECONDS,
     )
 
@@ -142,7 +161,18 @@ async def send_new_user_notification(
             )
             return
 
-        await _deliver(message)
+        tls_mode = _tls_mode()
+        if tls_mode is None:
+            # Present but unrecognized. Distinct from absent, and distinct from
+            # a relay failure: neither retrying nor waiting fixes a typo.
+            logger.error(
+                "Admin notification NOT sent: SMTP_TLS=%r is not one of %s.",
+                settings.smtp_tls,
+                ", ".join(sorted(TLS_MODES)),
+            )
+            return
+
+        await _deliver(message, tls_mode)
         logger.info("Admin notification sent to %d recipient(s).", len(recipients))
     except Exception:
         logger.exception(
