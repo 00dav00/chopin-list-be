@@ -5,6 +5,7 @@ from pymongo import ReturnDocument
 
 from .config import settings
 from .db import get_db
+from .notifications import dispatch_new_user_notification
 from .utils import serialize_doc, utcnow
 
 
@@ -60,6 +61,17 @@ async def authenticate_google_token(token: str, db) -> dict:
         return_document=ReturnDocument.AFTER,
     )
     user_doc.setdefault("admin", False)
+
+    # First-ever sign-in: both timestamps come from the same `now` in the upsert
+    # above, so they compare equal on insert and never again. Do NOT compare
+    # `created_at` to a fresh utcnow(): BSON stores milliseconds, so that is
+    # false even on insert. Fire-and-forget; must not affect this request.
+    created_at = user_doc.get("created_at")
+    if created_at is not None and created_at == user_doc.get("last_login_at"):
+        dispatch_new_user_notification(
+            db, user_doc.get("name"), user_doc.get("email")
+        )
+
     if not user_doc.get("approved", True):
         raise HTTPException(status_code=403, detail="Account pending approval.")
 

@@ -1,7 +1,10 @@
+import asyncio
+import logging
+
 import pytest
 from fastapi import HTTPException
 
-from app import auth
+from app import auth, notifications
 
 
 @pytest.mark.asyncio
@@ -182,3 +185,108 @@ async def test_get_current_user_ignores_admin_flag_from_google_payload(db, monke
     stored = await db.users.find_one({"google_sub": "sub123"})
     assert stored is not None
     assert stored["admin"] is False
+
+
+# ---------------------------------------------------------------------------
+# New-user admin notification -- trigger half. The module's own behaviour is in
+# tests/test_notifications.py (AGENTS.md: one test file per module). These drive
+# the real Mongo upsert: the discriminator compares two stored timestamps, so a
+# fabricated document would pass against a broken comparison and prove nothing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def google_payload(monkeypatch):
+    def fake_verify(*args, **kwargs):
+        return {
+            "sub": "sub123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "picture": "https://example.com/avatar.png",
+            "iss": "accounts.google.com",
+        }
+
+    monkeypatch.setattr(auth.id_token, "verify_oauth2_token", fake_verify)
+
+
+@pytest.fixture
+def dispatched(monkeypatch):
+    """Record notification dispatches without scheduling a real send."""
+    calls = []
+    monkeypatch.setattr(
+        auth,
+        "dispatch_new_user_notification",
+        lambda db, name, email: calls.append((name, email)),
+    )
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_first_sign_in_dispatches_admin_notification(
+    db, google_payload, dispatched
+):
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert exc.value.status_code == 403
+
+    assert dispatched == [("Test User", "user@example.com")]
+
+
+@pytest.mark.asyncio
+async def test_reauthentication_does_not_dispatch_admin_notification(
+    db, google_payload, dispatched
+):
+    # First sign-in creates the pending account and 403s by design.
+    with pytest.raises(HTTPException):
+        await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert len(dispatched) == 1
+
+    # An admin approves them.
+    await db.users.update_one(
+        {"google_sub": "sub123"}, {"$set": {"approved": True}}
+    )
+
+    # Both timestamps are millisecond-truncated by BSON, so a re-auth inside the
+    # same millisecond as the insert would misfire. Step past it so this asserts
+    # the discriminator rather than the clock.
+    await asyncio.sleep(0.01)
+
+    # They come back. No second notification.
+    await auth.get_current_user(authorization="Bearer valid", db=db)
+    assert len(dispatched) == 1
+
+    stored = await db.users.find_one({"google_sub": "sub123"})
+    assert stored["created_at"] != stored["last_login_at"]
+
+
+@pytest.mark.asyncio
+async def test_broken_smtp_still_yields_403_not_5xx(
+    db, google_payload, monkeypatch, caplog
+):
+    """AC: an unreachable relay must not change the auth outcome."""
+    await db.users.insert_one({"email": "admin@example.com", "admin": True})
+    monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
+    monkeypatch.setattr(notifications.settings, "smtp_host", "smtp.example.com")
+    monkeypatch.setattr(notifications.settings, "smtp_port", 587)
+    # Pinned, not inherited from the environment: without this the send aborts
+    # on missing config and never reaches the relay this test exists to break.
+    monkeypatch.setattr(notifications.settings, "smtp_tls", "starttls")
+    monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
+
+    async def explode(*args, **kwargs):
+        raise ConnectionRefusedError("relay is down")
+
+    monkeypatch.setattr(notifications.aiosmtplib, "send", explode)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc:
+            await auth.get_current_user(authorization="Bearer valid", db=db)
+        # The normal pending-approval 403, not a 500.
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "Account pending approval."
+
+        # Drain the fire-and-forget send so its failure is observable here.
+        for task in set(notifications._pending_sends):
+            await task
+
+    assert "Admin notification failed" in caplog.text

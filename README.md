@@ -11,6 +11,45 @@ FastAPI + MongoDB backend that authenticates every request with a Google ID toke
 - `GOOGLE_CLIENT_ID` (required)
 - `CHOPIN_LIST_FE_URL` (required)
 
+Admins are emailed when a new user requests access. Recipients are every user
+with `admin: true` in the database, so there is nothing to configure per admin
+— grant the flag with `python -m app.tasks set-user-admin <email>`. If nobody
+holds it, the app logs an error and sends nothing.
+
+The relay is configured with:
+
+- `SMTP_HOST`, `SMTP_PORT`
+- `SMTP_TLS` — `implicit` (TLS from connect, conventionally port 465),
+  `starttls` (upgrade after connect, conventionally 587/2525), or `none`
+  (plaintext, local development only)
+- `SMTP_USER`, `SMTP_PASSWORD` — omit for a relay that needs no auth
+- `MAIL_FROM`
+- `MAIL_DRY_RUN` — print the message instead of sending it
+
+These are optional so the app boots without credentials, but a deployment
+missing any of them logs an error and sends nothing. Set `SMTP_TLS` explicitly
+in every environment that sends: it is not inferred from the port.
+
+### Trying it locally
+
+`docker compose up` starts [Mailpit](https://mailpit.axllent.org/), a fake
+inbox that captures mail instead of delivering it. The defaults in `.env`
+point at it; read what was sent at <http://localhost:8025>.
+
+Make yourself an admin first, or there is nobody to send to:
+
+```bash
+docker compose run --rm api python -m app.tasks set-user-admin you@example.com
+```
+
+Only a user's *first* sign-in notifies, so to re-trigger it, drop the account
+first:
+
+```bash
+docker compose exec mongo mongosh shoplist \
+  --eval 'db.users.deleteOne({email:"you@example.com"})'
+```
+
 ## Run
 
 ```bash
