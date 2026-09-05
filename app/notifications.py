@@ -42,26 +42,29 @@ PENDING_USERS_FRAGMENT = "/#/admin/pending-users"
 _pending_sends: set[asyncio.Task] = set()
 
 
-def _recipients() -> list[str]:
-    """Admin recipients, parsed from the comma-separated env value."""
-    return [
-        address.strip()
-        for address in (settings.mail_admin_to or "").split(",")
-        if address.strip()
-    ]
+async def _recipients(db) -> list[str]:
+    """Every user flagged `admin`, sorted so the To header is stable.
+
+    Not filtered by `approved`: the first admin is created by
+    `python -m app.tasks set-user-admin`, which sets the flag alone.
+    """
+    cursor = db.users.find({"admin": True}, {"email": 1}).sort("email", 1)
+    return [doc["email"] async for doc in cursor if doc.get("email")]
 
 
 def _pending_users_link() -> str:
     return f"{settings.chopin_list_fe_url.rstrip('/')}{PENDING_USERS_FRAGMENT}"
 
 
-def _build_message(name: Optional[str], email: Optional[str]) -> EmailMessage:
+def _build_message(
+    recipients: list[str], name: Optional[str], email: Optional[str]
+) -> EmailMessage:
     """Plain-text notification. No IDs, tokens, or internal vocabulary (#8)."""
     display_name = name or "Someone"
     message = EmailMessage()
     message["Subject"] = "New Chopin List access request"
     message["From"] = settings.mail_from or ""
-    message["To"] = ", ".join(_recipients())
+    message["To"] = ", ".join(recipients)
     message.set_content(
         f"{display_name} has requested access to Chopin List.\n"
         f"\n"
@@ -81,7 +84,6 @@ def _missing_config() -> list[str]:
         "SMTP_PORT": settings.smtp_port,
         "SMTP_TLS": settings.smtp_tls,
         "MAIL_FROM": settings.mail_from,
-        "MAIL_ADMIN_TO": settings.mail_admin_to,
     }
     return sorted(name for name, value in required.items() if not value)
 
@@ -107,19 +109,20 @@ async def _deliver(message: EmailMessage, tls_mode: str) -> None:
 
 
 async def send_new_user_notification(
-    name: Optional[str], email: Optional[str]
+    db, name: Optional[str], email: Optional[str]
 ) -> None:
     """Compose and send the admin notification. Never raises."""
     try:
-        recipients = _recipients()
-        if not recipients and not settings.mail_dry_run:
+        recipients = await _recipients(db)
+        if not recipients:
             logger.error(
-                "Admin notification NOT sent: MAIL_ADMIN_TO is not configured. "
-                "New users will request access with nobody notified."
+                "Admin notification NOT sent: no user has admin=true, so there "
+                "is nobody to notify. Grant it with "
+                "`python -m app.tasks set-user-admin <email>`."
             )
             return
 
-        message = _build_message(name, email)
+        message = _build_message(recipients, name, email)
 
         if settings.mail_dry_run:
             # Dry run writes to stdout so a developer running the app with no
@@ -160,7 +163,7 @@ async def send_new_user_notification(
 
 
 def dispatch_new_user_notification(
-    name: Optional[str], email: Optional[str]
+    db, name: Optional[str], email: Optional[str]
 ) -> None:
     """Fire-and-forget the notification. Returns immediately; never raises.
 
@@ -171,7 +174,7 @@ def dispatch_new_user_notification(
     # request always raises 403, so a BackgroundTasks send would never fire for
     # the one case this exists to serve -- and would fail only in production.
     try:
-        task = asyncio.create_task(send_new_user_notification(name, email))
+        task = asyncio.create_task(send_new_user_notification(db, name, email))
     except RuntimeError:
         # No running event loop (e.g. a synchronous call site). Nothing to do
         # here that wouldn't block the caller, which is the one thing this

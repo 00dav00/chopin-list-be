@@ -216,7 +216,7 @@ def dispatched(monkeypatch):
     monkeypatch.setattr(
         auth,
         "dispatch_new_user_notification",
-        lambda name, email: calls.append((name, email)),
+        lambda db, name, email: calls.append((name, email)),
     )
     return calls
 
@@ -264,13 +264,14 @@ async def test_broken_smtp_still_yields_403_not_5xx(
     db, google_payload, monkeypatch, caplog
 ):
     """AC: an unreachable relay must not change the auth outcome."""
+    await db.users.insert_one({"email": "admin@example.com", "admin": True})
     monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
     monkeypatch.setattr(notifications.settings, "smtp_host", "smtp.example.com")
     monkeypatch.setattr(notifications.settings, "smtp_port", 587)
+    # Pinned, not inherited from the environment: without this the send aborts
+    # on missing config and never reaches the relay this test exists to break.
+    monkeypatch.setattr(notifications.settings, "smtp_tls", "starttls")
     monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
-    monkeypatch.setattr(
-        notifications.settings, "mail_admin_to", "admin@example.com"
-    )
 
     async def explode(*args, **kwargs):
         raise ConnectionRefusedError("relay is down")

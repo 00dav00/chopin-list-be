@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     smtp_user: str | None = Field(default=None, alias="SMTP_USER")
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     mail_from: str | None = Field(default=None, alias="MAIL_FROM")
-    mail_admin_to: str | None = Field(default=None, alias="MAIL_ADMIN_TO")
     mail_dry_run: bool = Field(default=False, alias="MAIL_DRY_RUN")
 
 
