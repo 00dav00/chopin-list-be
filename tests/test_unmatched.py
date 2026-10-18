@@ -314,3 +314,101 @@ async def test_admin_unmatched_endpoints_require_admin(client, method, path, bod
     response = await client.request(method, path, json=body)
 
     assert response.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Send: failure handling and storage details
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_key_race_is_retried_and_counted(client, db, emailed, monkeypatch):
+    # Another send inserted the same new name between our lookup and insert.
+    from pymongo.errors import DuplicateKeyError
+
+    real_upsert = unmatched_router._upsert_open_entry
+    calls = []
+
+    async def racing_upsert(database, name, now):
+        calls.append(name)
+        if len(calls) == 1:
+            await real_upsert(database, name, now)  # the "other" request wins
+            raise DuplicateKeyError("E11000 duplicate key")
+        await real_upsert(database, name, now)
+
+    monkeypatch.setattr(unmatched_router, "_upsert_open_entry", racing_upsert)
+    run_id = await make_run(db, "tahini")
+
+    response = await client.post(f"/grouping-runs/{run_id}/send")
+
+    assert response.json() == {"sent": True}
+    assert [(entry["name"], entry["count"]) for entry in await open_entries(db)] == [("tahini", 2)]
+    assert emailed == [{"names": ["tahini"]}]
+
+
+@pytest.mark.asyncio
+async def test_failed_store_releases_the_run_for_a_retry(client, db, emailed, monkeypatch):
+    real_upsert = unmatched_router._upsert_open_entry
+
+    async def broken_upsert(database, name, now):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(unmatched_router, "_upsert_open_entry", broken_upsert)
+    run_id = await make_run(db, "tahini")
+
+    with pytest.raises(RuntimeError):
+        await client.post(f"/grouping-runs/{run_id}/send")
+
+    assert emailed == []
+    assert (await db.grouping_runs.find_one({"_id": ObjectId(run_id)}))["sent_at"] is None
+    monkeypatch.setattr(unmatched_router, "_upsert_open_entry", real_upsert)
+    retry = await client.post(f"/grouping-runs/{run_id}/send")
+    assert retry.json() == {"sent": True}
+    assert emailed == [{"names": ["tahini"]}]
+
+
+@pytest.mark.asyncio
+async def test_latest_spelling_wins_on_an_open_entry(client, db, emailed):
+    first = await make_run(db, "Tahini")
+    await client.post(f"/grouping-runs/{first}/send")
+    before = (await open_entries(db))[0]["last_sent_at"]
+    second = await make_run(db, "tahini")
+    await client.post(f"/grouping-runs/{second}/send")
+
+    entries = await open_entries(db)
+    assert [(entry["name"], entry["count"]) for entry in entries] == [("tahini", 2)]
+    assert entries[0]["last_sent_at"] >= before
+
+
+@pytest.mark.asyncio
+async def test_new_entries_store_resolved_at_as_null(client, db, emailed):
+    # The unique partial index only covers documents whose resolved_at is null.
+    run_id = await make_run(db, "tahini")
+
+    await client.post(f"/grouping-runs/{run_id}/send")
+
+    entry = (await open_entries(db))[0]
+    assert "resolved_at" in entry and entry["resolved_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_run_with_only_blank_names_sends_no_email(client, db, emailed):
+    run_id = await make_run(db, "\x00", "   ")
+
+    response = await client.post(f"/grouping-runs/{run_id}/send")
+
+    assert response.json() == {"sent": True}
+    assert emailed == []
+    assert await db.unmatched_items.count_documents({}) == 0
+
+
+@pytest.mark.asyncio
+async def test_list_is_capped_to_the_newest_entries(client, db, as_admin, monkeypatch):
+    monkeypatch.setattr(unmatched_router, "UNMATCHED_LIST_LIMIT", 2)
+    await seed_entry(db, "oldest", 10)
+    await seed_entry(db, "newest", 14)
+    await seed_entry(db, "middle", 12)
+
+    response = await client.get("/me/admin/unmatched-items")
+
+    assert [entry["name"] for entry in response.json()] == ["newest", "middle"]
