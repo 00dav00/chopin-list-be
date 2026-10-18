@@ -111,3 +111,35 @@ def test_default_groups_are_unique_and_never_other():
     keys = [name.casefold() for name in DEFAULT_GROUPS]
     assert len(keys) == len(set(keys))
     assert "other" not in keys
+
+
+def test_seed_default_groups_command_reports_count(monkeypatch):
+    from typer.testing import CliRunner
+
+    from app import tasks
+
+    async def inserted():
+        return 17
+
+    monkeypatch.setattr(tasks, "_seed_default_groups", inserted)
+
+    result = CliRunner().invoke(tasks.app, ["seed-default-groups"])
+
+    assert result.exit_code == 0
+    assert "Inserted 17 default groups." in result.output
+
+
+def test_seed_default_groups_command_fails_when_groups_exist(monkeypatch):
+    from typer.testing import CliRunner
+
+    from app import tasks
+
+    async def refused():
+        return None
+
+    monkeypatch.setattr(tasks, "_seed_default_groups", refused)
+
+    result = CliRunner().invoke(tasks.app, ["seed-default-groups"])
+
+    assert result.exit_code == 1
+    assert "Groups already exist; nothing inserted." in result.output

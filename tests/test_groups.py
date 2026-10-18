@@ -54,6 +54,20 @@ async def test_new_groups_are_appended_before_other(client, as_admin):
 
 
 @pytest.mark.asyncio
+async def test_other_stays_after_every_group_when_positions_have_gaps(client, as_admin):
+    dairy = await _create(client, "Dairy")
+    await _create(client, "Fruit")
+    await client.delete(f"/me/admin/groups/{dairy['id']}")
+    await _create(client, "Bakery")
+
+    groups = (await client.get("/me/admin/groups")).json()
+
+    assert _names(groups) == ["Fruit", "Bakery", "Other"]
+    other = groups[-1]
+    assert all(other["position"] > group["position"] for group in groups[:-1])
+
+
+@pytest.mark.asyncio
 async def test_create_group_collapses_whitespace_in_name(client, as_admin):
     group = await _create(client, "  Fish   &  seafood ")
 
@@ -256,3 +270,30 @@ async def test_groups_endpoints_require_admin(client, db, method, path, body):
     assert response.status_code == 403
     assert response.json()["detail"] == "Admin access required."
     assert await db.groups.count_documents({}) == 0
+
+
+@pytest.mark.asyncio
+async def test_unique_index_race_on_create_and_rename_returns_409(
+    client, as_admin, db, monkeypatch
+):
+    # A concurrent request can pass the in-code check; the index is the backstop.
+    from app.routers import groups as groups_router
+    from app.schemas import group_name_key
+
+    await db.groups.create_index("name_key", unique=True)
+    await _create(client, "Dairy")
+    fruit = await _create(client, "Fruit")
+
+    async def skip_check(db, name, exclude_id=None):
+        return group_name_key(name)
+
+    monkeypatch.setattr(groups_router, "_ensure_name_available", skip_check)
+
+    created = await client.post("/me/admin/groups", json={"name": "dairy"})
+    renamed = await client.patch(f"/me/admin/groups/{fruit['id']}", json={"name": "DAIRY"})
+
+    assert created.status_code == 409
+    assert renamed.status_code == 409
+    assert created.json()["detail"] == "A group with this name already exists."
+    assert renamed.json()["detail"] == "A group with this name already exists."
+    assert await db.groups.count_documents({}) == 2

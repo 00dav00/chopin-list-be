@@ -21,10 +21,11 @@ async def list_stored_groups(db) -> list[dict]:
 
 
 def with_other(groups: list[dict]) -> list[dict]:
+    # Deletes leave gaps in stored positions, so len(groups) could collide.
     other = {
         "id": OTHER_GROUP_ID,
         "name": OTHER_GROUP_NAME,
-        "position": len(groups),
+        "position": (groups[-1]["position"] + 1) if groups else 0,
         "built_in": True,
     }
     return [*groups, other]
