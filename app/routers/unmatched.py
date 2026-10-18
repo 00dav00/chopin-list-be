@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from ..auth import get_current_user, require_admin
 from ..classifier import clean_name
@@ -31,6 +31,27 @@ def _distinct_clean_names(unmatched: list[dict]) -> list[str]:
     return list(names.values())
 
 
+async def _upsert_open_entry(db, name: str, now) -> None:
+    await db.unmatched_items.update_one(
+        {"name_key": group_name_key(name), "resolved_at": None},
+        {
+            "$set": {"name": name, "last_sent_at": now},
+            "$inc": {"count": 1},
+            "$setOnInsert": {"created_at": now, "resolution": None},
+        },
+        upsert=True,
+    )
+
+
+async def _record_name(db, name: str, now) -> None:
+    try:
+        await _upsert_open_entry(db, name, now)
+    except DuplicateKeyError:
+        # Another send created the open entry between our lookup and insert;
+        # the retry now matches it and increments.
+        await _upsert_open_entry(db, name, now)
+
+
 @router.post("/grouping-runs/{run_id}/send", response_model=SendRunOut)
 async def send_grouping_run(
     run_id: str, current_user=Depends(get_current_user), db=Depends(get_db)
@@ -50,16 +71,15 @@ async def send_grouping_run(
         raise HTTPException(status_code=404, detail="Grouping run not found.")
 
     names = _distinct_clean_names(run.get("unmatched", []))
-    for name in names:
-        await db.unmatched_items.update_one(
-            {"name_key": group_name_key(name), "resolved_at": None},
-            {
-                "$set": {"name": name, "last_sent_at": now},
-                "$inc": {"count": 1},
-                "$setOnInsert": {"created_at": now, "resolution": None},
-            },
-            upsert=True,
+    try:
+        for name in names:
+            await _record_name(db, name, now)
+    except Exception:
+        # Release the claim so the shopper can retry rather than get sent:false.
+        await db.grouping_runs.update_one(
+            {"_id": run_object_id, "sent_at": now}, {"$set": {"sent_at": None}}
         )
+        raise
     if names:
         dispatch_unmatched_items_notification(db, names)
     return {"sent": True}
