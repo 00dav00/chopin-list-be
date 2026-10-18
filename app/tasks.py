@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
 from .config import settings
-from .routers.groups import name_key
+from .schemas import group_name_key
 from .utils import utcnow
 
 app = typer.Typer(help="Operational tasks for the Shoplist API.")
@@ -77,7 +77,7 @@ async def seed_default_groups(db) -> int | None:
     docs = [
         {
             "name": name,
-            "name_key": name_key(name),
+            "name_key": group_name_key(name),
             "position": position,
             "created_at": now,
             "updated_at": now,

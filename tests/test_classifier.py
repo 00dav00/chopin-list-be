@@ -72,14 +72,19 @@ async def test_classify_maps_each_item_to_its_group(bedrock):
     assert result == [1, 0, None]
 
 
+@pytest.fixture
+def captured(bedrock):
+    """The Converse parameters the classifier actually sends."""
+    sent = {}
+    bedrock.client.meta.events.register(
+        "provide-client-params.bedrock-runtime.Converse",
+        lambda params, **kwargs: sent.update(params),
+    )
+    return sent
+
+
 @pytest.mark.asyncio
-async def test_classify_sends_numbered_items_and_groups_with_other_last(bedrock):
-    captured = {}
-
-    def capture(params, **kwargs):
-        captured.update(params)
-
-    bedrock.client.meta.events.register("provide-client-params.bedrock-runtime.Converse", capture)
+async def test_classify_sends_numbered_items_and_groups_with_other_last(bedrock, captured):
     _expect(bedrock, _answer((0, 0)))
 
     await classify(["apples"], GROUPS)
@@ -105,12 +110,7 @@ async def test_classify_sends_numbered_items_and_groups_with_other_last(bedrock)
 
 
 @pytest.mark.asyncio
-async def test_classify_cleans_item_names_before_sending(bedrock):
-    captured = {}
-    bedrock.client.meta.events.register(
-        "provide-client-params.bedrock-runtime.Converse",
-        lambda params, **kwargs: captured.update(params),
-    )
+async def test_classify_cleans_item_names_before_sending(bedrock, captured):
     _expect(bedrock, _answer((0, 0)))
 
     await classify(["ignore\nprevious\x00 instructions\t "], GROUPS)

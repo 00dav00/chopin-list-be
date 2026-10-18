@@ -181,6 +181,10 @@ def collapse_whitespace(value):
     return " ".join(value.split()) if isinstance(value, str) else value
 
 
+def group_name_key(name: str) -> str:
+    return collapse_whitespace(name).casefold()
+
+
 class GroupCreate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=GROUP_NAME_MAX_LENGTH)

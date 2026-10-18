@@ -4,7 +4,7 @@ from pymongo.errors import DuplicateKeyError
 
 from ..auth import get_current_user, require_admin
 from ..db import get_db
-from ..schemas import GroupCreate, GroupOut, GroupUpdate, ReorderGroups
+from ..schemas import GroupCreate, GroupOut, GroupUpdate, ReorderGroups, group_name_key
 from ..utils import serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/me/admin/groups", tags=["groups"])
@@ -13,10 +13,6 @@ OTHER_GROUP_ID = "other"
 OTHER_GROUP_NAME = "Other"
 DUPLICATE_NAME_MESSAGE = "A group with this name already exists."
 RESERVED_NAME_MESSAGE = '"Other" is built in and cannot be used as a group name.'
-
-
-def name_key(name: str) -> str:
-    return " ".join(name.split()).casefold()
 
 
 async def list_stored_groups(db) -> list[dict]:
@@ -35,8 +31,8 @@ def with_other(groups: list[dict]) -> list[dict]:
 
 
 async def _ensure_name_available(db, name: str, exclude_id=None) -> str:
-    key = name_key(name)
-    if key == name_key(OTHER_GROUP_NAME):
+    key = group_name_key(name)
+    if key == group_name_key(OTHER_GROUP_NAME):
         raise HTTPException(status_code=422, detail=RESERVED_NAME_MESSAGE)
     query = {"name_key": key}
     if exclude_id is not None:
