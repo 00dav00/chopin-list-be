@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,9 +27,15 @@ class Settings(BaseSettings):
     # outside dry-run, not a mode -- the send path refuses and says so.
     smtp_tls: str | None = Field(default=None, alias="SMTP_TLS")
     smtp_user: str | None = Field(default=None, alias="SMTP_USER")
-    smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
+    # Secrets are SecretStr so the settings repr, or a traceback that captures
+    # it, never prints them.
+    smtp_password: SecretStr | None = Field(default=None, alias="SMTP_PASSWORD")
     mail_from: str | None = Field(default=None, alias="MAIL_FROM")
     mail_dry_run: bool = Field(default=False, alias="MAIL_DRY_RUN")
+    # Present and non-blank selects the Brevo HTTPS API over SMTP. It is not the
+    # SMTP key: the two are separate Brevo credentials and neither works for the
+    # other.
+    brevo_api_key: SecretStr | None = Field(default=None, alias="BREVO_API_KEY")
 
 
 settings = Settings()

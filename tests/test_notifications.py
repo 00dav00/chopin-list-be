@@ -1,7 +1,9 @@
 import logging
 
+import httpx
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 
 from app import notifications
 
@@ -20,8 +22,11 @@ def configured(monkeypatch):
     monkeypatch.setattr(notifications.settings, "smtp_port", 587)
     monkeypatch.setattr(notifications.settings, "smtp_tls", "starttls")
     monkeypatch.setattr(notifications.settings, "smtp_user", "relay-user")
-    monkeypatch.setattr(notifications.settings, "smtp_password", "relay-password")
+    monkeypatch.setattr(
+        notifications.settings, "smtp_password", SecretStr("relay-password")
+    )
     monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", None)
 
 
 @pytest_asyncio.fixture
@@ -87,6 +92,7 @@ async def test_dry_run_writes_to_stdout_and_never_opens_smtp(
 ):
     # Deliberately no SMTP credentials set: dry-run must not require them.
     monkeypatch.setattr(notifications.settings, "mail_dry_run", True)
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", None)
     monkeypatch.setattr(notifications.settings, "smtp_host", None)
     monkeypatch.setattr(notifications.settings, "smtp_port", None)
     monkeypatch.setattr(notifications.settings, "mail_from", None)
@@ -112,6 +118,7 @@ async def test_missing_smtp_config_outside_dry_run_logs_loudly_and_does_not_send
 ):
     monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
     monkeypatch.setattr(notifications.settings, "smtp_host", None)
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", None)
     monkeypatch.setattr(notifications.settings, "smtp_port", None)
     monkeypatch.setattr(notifications.settings, "smtp_tls", None)
     monkeypatch.setattr(notifications.settings, "mail_from", None)
@@ -256,3 +263,404 @@ async def test_no_admin_in_the_database_logs_loudly_and_does_not_send(
     assert "admin=true" in caplog.text
     assert "set-user-admin" in caplog.text
     assert "Admin notification failed" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Brevo API transport. Selected when BREVO_API_KEY is set; the auth-path half
+# of this contract lives in tests/test_auth.py.
+# ---------------------------------------------------------------------------
+
+# Distinctive so a leak into any log record is unmistakable.
+KEY = "xkeysib-SENTINEL-do-not-log-0123456789"
+SENT = "Admin notification sent"
+TRANSIENT = "Admin notification failed"
+
+
+@pytest.fixture
+def api_configured(monkeypatch):
+    """The production shape: a key and MAIL_FROM, no SMTP settings at all."""
+    monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", SecretStr(KEY))
+    monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
+    for name in ("smtp_host", "smtp_port", "smtp_tls", "smtp_user", "smtp_password"):
+        monkeypatch.setattr(notifications.settings, name, None)
+
+
+async def notify(db):
+    await notifications.send_new_user_notification(
+        db, "New Person", "new@example.com"
+    )
+
+
+def assert_key_never_logged(caplog):
+    for record in caplog.records:
+        assert KEY not in record.getMessage()
+        assert KEY not in (record.exc_text or "")
+    assert KEY not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_outbound_http_guard_blocks_real_requests():
+    # Proves the conftest guard is armed: a test that forgets to stub the
+    # network fails loudly instead of sending live mail.
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(AssertionError, match="real outbound HTTP"):
+            await client.get("https://api.brevo.com/v3/account")
+
+
+# --- Transport selection ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_without_a_key_smtp_sends_and_the_api_is_untouched(
+    configured, sent, brevo_api, admins
+):
+    await notify(admins)
+
+    assert len(sent) == 1
+    assert brevo_api.requests == []
+
+
+@pytest.mark.asyncio
+async def test_key_with_no_smtp_settings_sends_through_the_api(
+    api_configured, sent, brevo_api, caplog, admins
+):
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert len(brevo_api.requests) == 1
+    assert sent == []
+    # SMTP settings are irrelevant on this path and must not be reported.
+    assert "SMTP" not in caplog.text
+    assert "Admin notification sent to 2 recipient(s) via brevo-api." in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("smtp_tls", ["starttls", "ssl"])
+async def test_key_wins_over_complete_smtp_even_with_a_bad_tls_mode(
+    configured, sent, brevo_api, monkeypatch, caplog, admins, smtp_tls
+):
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", SecretStr(KEY))
+    monkeypatch.setattr(notifications.settings, "smtp_tls", smtp_tls)
+
+    with caplog.at_level(logging.ERROR):
+        await notify(admins)
+
+    assert len(brevo_api.requests) == 1
+    assert sent == []
+    assert caplog.text == ""
+
+
+@pytest.mark.asyncio
+async def test_key_with_partial_smtp_does_not_report_smtp_gaps(
+    api_configured, brevo_api, monkeypatch, caplog, admins
+):
+    monkeypatch.setattr(notifications.settings, "smtp_host", "smtp.example.com")
+
+    with caplog.at_level(logging.ERROR):
+        await notify(admins)
+
+    assert len(brevo_api.requests) == 1
+    assert caplog.text == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank", ["", "   \n"])
+async def test_blank_key_counts_as_absent(
+    api_configured, brevo_api, monkeypatch, caplog, admins, blank
+):
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", SecretStr(blank))
+
+    with caplog.at_level(logging.ERROR):
+        await notify(admins)
+
+    # Falls back to SMTP, which is unconfigured, and says so.
+    assert brevo_api.requests == []
+    assert "SMTP_HOST" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_key_is_stripped_before_use(
+    api_configured, brevo_api, monkeypatch, admins
+):
+    monkeypatch.setattr(
+        notifications.settings, "brevo_api_key", SecretStr(f"  {KEY}\n")
+    )
+
+    await notify(admins)
+
+    assert brevo_api.requests[0].headers["api-key"] == KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_key", [f"{KEY[:10]}\n{KEY[10:]}", f"{KEY}é", f"{KEY[:10]} {KEY[10:]}"]
+)
+async def test_malformed_key_is_refused_without_quoting_it(
+    api_configured, brevo_api, monkeypatch, caplog, admins, bad_key
+):
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", SecretStr(bad_key))
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert brevo_api.requests == []
+    assert "BREVO_API_KEY" in caplog.text
+    assert SENT not in caplog.text
+    assert TRANSIENT not in caplog.text
+    for part in bad_key.split():
+        assert part not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_key_without_mail_from_names_only_mail_from(
+    api_configured, brevo_api, monkeypatch, caplog, admins
+):
+    monkeypatch.setattr(notifications.settings, "mail_from", None)
+
+    with caplog.at_level(logging.ERROR):
+        await notify(admins)
+
+    assert brevo_api.requests == []
+    assert "MAIL_FROM" in caplog.text
+    assert "SMTP" not in caplog.text
+    assert TRANSIENT not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key,smtp_host,transport",
+    [(KEY, "smtp.example.com", "brevo-api"), (None, None, "smtp")],
+)
+async def test_dry_run_names_the_transport_and_never_sends(
+    monkeypatch, capsys, brevo_api, sent, admins, key, smtp_host, transport
+):
+    monkeypatch.setattr(notifications.settings, "mail_dry_run", True)
+    monkeypatch.setattr(
+        notifications.settings, "brevo_api_key", SecretStr(key) if key else None
+    )
+    monkeypatch.setattr(notifications.settings, "smtp_host", smtp_host)
+
+    await notify(admins)
+
+    out = capsys.readouterr().out
+    assert f"(transport: {transport})" in out
+    assert KEY[:12] not in out
+    assert brevo_api.requests == []
+    assert sent == []
+
+
+# --- What is sent ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_request_carries_key_header_and_the_smtp_message_content(
+    api_configured, brevo_api, admins
+):
+    await notify(admins)
+
+    request = brevo_api.requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://api.brevo.com/v3/smtp/email"
+    assert request.headers["api-key"] == KEY
+    assert request.headers["content-type"] == "application/json"
+
+    # Same subject and body the SMTP path sends, so the two cannot drift.
+    message = notifications._build_message(
+        ["admin@example.com", "other@example.com"], "New Person", "new@example.com"
+    )
+    assert brevo_api.payload() == {
+        "sender": {"email": "no-reply@example.com"},
+        "to": [{"email": "admin@example.com"}, {"email": "other@example.com"}],
+        "subject": "New Chopin List access request",
+        "textContent": message.get_content(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_recipients_come_from_the_list_not_the_folded_to_header(
+    api_configured, brevo_api, db
+):
+    emails = sorted(f"administrator.number.{i}@long-example-domain.com" for i in range(5))
+    await db.users.insert_many(
+        [{"google_sub": f"sub-{i}", "email": e, "admin": True} for i, e in enumerate(emails)]
+    )
+
+    await notify(db)
+
+    # Guard against this test silently going vacuous: the header must fold.
+    headers = notifications._build_message(emails, "N", "n@example.com").as_string()
+    assert any(line.startswith((" ", "\t")) for line in headers.split("\n\n")[0].splitlines())
+    assert brevo_api.payload()["to"] == [{"email": e} for e in emails]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mail_from,sender",
+    [
+        ("no-reply@example.com", {"email": "no-reply@example.com"}),
+        (
+            "Chopin List <no-reply@example.com>",
+            {"email": "no-reply@example.com", "name": "Chopin List"},
+        ),
+    ],
+)
+async def test_sender_is_parsed_from_mail_from(
+    api_configured, brevo_api, monkeypatch, admins, mail_from, sender
+):
+    monkeypatch.setattr(notifications.settings, "mail_from", mail_from)
+
+    await notify(admins)
+
+    assert brevo_api.payload()["sender"] == sender
+
+
+# --- Responses ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(201, json={"messageId": "<id@smtp-relay.mailin.fr>"}),
+        # Success must not depend on parsing the body.
+        httpx.Response(201),
+        httpx.Response(200, json={}),
+    ],
+)
+async def test_any_2xx_is_success(api_configured, brevo_api, caplog, admins, response):
+    brevo_api.respond = lambda request: response
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert "sent to 2 recipient(s) via brevo-api" in caplog.text
+    assert_key_never_logged(caplog)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (401, {"code": "unauthorized", "message": "Key not found"}, "BREVO_API_KEY"),
+        (402, {"code": "not_enough_credits", "message": "x"}, "sending credits"),
+        (400, {"code": "invalid_parameter", "message": "admin@example.com"}, "MAIL_FROM"),
+        (403, {"code": "permission_denied", "message": "x"}, "Retrying will not help"),
+        (404, {"code": "not_found", "message": "x"}, "Retrying will not help"),
+        (406, {"code": "not_acceptable", "message": "x"}, "Retrying will not help"),
+    ],
+)
+async def test_permanent_rejections_say_what_to_fix(
+    api_configured, brevo_api, caplog, admins, status, body, expected
+):
+    brevo_api.respond = lambda request: httpx.Response(status, json=body)
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert expected in caplog.text
+    assert repr(body["code"]) in caplog.text
+    # `message` can quote admin addresses; only `code` is logged.
+    assert body["message"] not in caplog.text or body["message"] == "x"
+    assert "admin@example.com" not in caplog.text
+    assert SENT not in caplog.text
+    assert TRANSIENT not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_server_error_is_transient_and_names_no_setting(
+    api_configured, brevo_api, caplog, admins
+):
+    brevo_api.respond = lambda request: httpx.Response(503, json={"code": "unavailable"})
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert TRANSIENT in caplog.text
+    assert "HTTP 503" in caplog.text
+    assert "BREVO_API_KEY" not in caplog.text
+    assert "MAIL_FROM" not in caplog.text
+    assert SENT not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(
+            502,
+            headers={"content-type": "text/html"},
+            text=f"<html>bad gateway, request had api-key: {KEY}</html>",
+        ),
+        httpx.Response(500),
+    ],
+)
+async def test_non_json_error_body_is_described_never_quoted(
+    api_configured, brevo_api, caplog, admins, response
+):
+    brevo_api.respond = lambda request: response
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert TRANSIENT in caplog.text
+    assert "bytes" in caplog.text
+    assert "bad gateway" not in caplog.text
+    assert SENT not in caplog.text
+    assert_key_never_logged(caplog)
+
+
+@pytest.mark.asyncio
+async def test_redirect_is_not_followed(api_configured, brevo_api, caplog, admins):
+    # Following it would forward the api-key header to whatever host it names.
+    brevo_api.respond = lambda request: httpx.Response(
+        307, headers={"location": "https://attacker.example/steal"}
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        await notify(admins)
+
+    assert len(brevo_api.requests) == 1
+    assert SENT not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ConnectTimeout("timed out"), RuntimeError("unexpected")],
+)
+async def test_network_errors_are_swallowed_as_transient(
+    api_configured, brevo_api, caplog, admins, error
+):
+    def fail(request):
+        raise error
+
+    brevo_api.respond = fail
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        # Must not raise: email is notification, not invariant.
+        await notify(admins)
+
+    assert TRANSIENT in caplog.text
+    assert SENT not in caplog.text
+    assert_key_never_logged(caplog)
+
+
+@pytest.mark.asyncio
+async def test_client_is_hardened(api_configured, brevo_api, monkeypatch, admins):
+    created = []
+    real_client = httpx.AsyncClient
+
+    def spy(**kwargs):
+        created.append(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(notifications.httpx, "AsyncClient", spy)
+
+    await notify(admins)
+
+    (kwargs,) = created
+    assert kwargs["verify"] is notifications.BREVO_SSL_CONTEXT
+    assert kwargs["follow_redirects"] is False
+    assert kwargs["trust_env"] is False
+    assert kwargs["timeout"] == notifications.BREVO_TIMEOUT_SECONDS

@@ -25,6 +25,9 @@ the polling path uses only `find_one` and `update_one`.
 - `MONGO_DB`
 - `GOOGLE_CLIENT_ID`
 - `CHOPIN_LIST_FE_URL`
+- `BREVO_API_KEY` and `MAIL_FROM` for admin notification email; Railway blocks
+  outbound SMTP on its lower plans, so the `SMTP_*` settings do not work there.
+  See the README's Environment section.
 
 ## Rollout Checks
 

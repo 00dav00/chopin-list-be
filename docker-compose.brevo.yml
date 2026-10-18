@@ -1,0 +1,9 @@
+# Opt-in live sending through the Brevo API, to every admin in the local DB:
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#     -f docker-compose.brevo.yml up
+# Needs BREVO_API_KEY and BREVO_MAIL_FROM (a Brevo-verified sender) in .env.
+services:
+  api:
+    environment:
+      BREVO_API_KEY: ${BREVO_API_KEY}
+      MAIL_FROM: ${BREVO_MAIL_FROM}
