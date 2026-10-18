@@ -30,3 +30,8 @@ async def init_db() -> None:
     await db.groups.create_index("position")
     # Unsent grouping runs are only useful for a short while after the tap.
     await db.grouping_runs.create_index("created_at", expireAfterSeconds=3600)
+    # One open entry per name; resolved entries are kept as history.
+    await db.unmatched_items.create_index(
+        "name_key", unique=True, partialFilterExpression={"resolved_at": {"$type": "null"}}
+    )
+    await db.unmatched_items.create_index([("resolved_at", 1), ("last_sent_at", -1)])

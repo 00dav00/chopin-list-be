@@ -225,3 +225,15 @@ class TemplateGroupingOut(BaseSchema):
     items: list[TemplateItemOut]
     run_id: Optional[str] = None
     unmatched: list[UnmatchedItemOut] = Field(default_factory=list)
+
+
+class SendRunOut(BaseSchema):
+    # False when this run was already sent; the call is safe to repeat.
+    sent: bool
+
+
+class UnmatchedEntryOut(BaseSchema):
+    id: str
+    name: str
+    count: int
+    last_sent_at: datetime
