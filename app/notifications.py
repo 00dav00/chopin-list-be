@@ -2,15 +2,19 @@
 
 Email is notification, not invariant: every failure here is logged and
 swallowed so it can never change the outcome of the request that triggered it.
-Provider-agnostic over plain SMTP; TLS mode is named in ``SMTP_TLS``.
+Sends through Brevo's HTTPS API when ``BREVO_API_KEY`` is set, else plain SMTP.
 """
 
 import asyncio
+import json
 import logging
+import re
 from email.message import EmailMessage
+from email.utils import parseaddr
 from typing import Optional
 
 import aiosmtplib
+import httpx
 
 from .config import settings
 
@@ -21,6 +25,24 @@ logger = logging.getLogger(__name__)
 # enough that a black-holed port would pin the task for the better part of a
 # minute.
 SMTP_TIMEOUT_SECONDS = 10.0
+
+# Where the API key is sent, so never configurable from env or request data.
+BREVO_SEND_URL = "https://api.brevo.com/v3/smtp/email"
+# httpx timeouts are per phase, and a server trickling bytes resets the read
+# timeout on every chunk; the send is also wrapped in this as a total bound.
+BREVO_TIMEOUT_SECONDS = 10.0
+# Built once: each new client would otherwise re-parse the CA bundle,
+# synchronously, on the event loop.
+BREVO_SSL_CONTEXT = httpx.create_ssl_context()
+# Error bodies are read only this far. Brevo's `message` quotes the offending
+# value (admin addresses), so only the short `code` is ever logged.
+BREVO_ERROR_BODY_LIMIT = 4096
+BREVO_ERROR_CODE = re.compile(r"[a-z_]{1,64}")
+# Retrying never fixes these; 401 is a bad key or an IP not authorised in Brevo.
+BREVO_PERMANENT_STATUSES = {400, 401, 403, 404, 406}
+
+TRANSPORT_API = "brevo-api"
+TRANSPORT_SMTP = "smtp"
 
 # SMTP_TLS -> (use_tls, start_tls) for aiosmtplib. Named, not derived from the
 # port: deriving guessed wrong for a relay on a nonstandard port and for a local
@@ -77,14 +99,32 @@ def _build_message(
     return message
 
 
-def _missing_config() -> list[str]:
-    """Names of the settings required to actually send, that are absent."""
-    required = {
-        "SMTP_HOST": settings.smtp_host,
-        "SMTP_PORT": settings.smtp_port,
-        "SMTP_TLS": settings.smtp_tls,
-        "MAIL_FROM": settings.mail_from,
-    }
+def _brevo_api_key() -> Optional[str]:
+    """The key with surrounding whitespace stripped, or None if absent or blank."""
+    secret = settings.brevo_api_key
+    key = secret.get_secret_value().strip() if secret else ""
+    return key or None
+
+
+def _is_valid_api_key(key: str) -> bool:
+    # Printable ASCII only. A control character inside the key reaches h11,
+    # which quotes the header value in its exception -- and that gets logged.
+    return all("!" <= char <= "~" for char in key)
+
+
+def _missing_config(transport: str) -> list[str]:
+    """Names of the settings the chosen transport needs to send, that are absent.
+
+    MAIL_FROM is checked with the SMTP settings, not before them, so one message
+    names every gap.
+    """
+    required = {"MAIL_FROM": settings.mail_from}
+    if transport == TRANSPORT_SMTP:
+        required |= {
+            "SMTP_HOST": settings.smtp_host,
+            "SMTP_PORT": settings.smtp_port,
+            "SMTP_TLS": settings.smtp_tls,
+        }
     return sorted(name for name, value in required.items() if not value)
 
 
@@ -101,11 +141,118 @@ async def _deliver(message: EmailMessage, tls_mode: str) -> None:
         hostname=settings.smtp_host,
         port=settings.smtp_port,
         username=settings.smtp_user or None,
-        password=settings.smtp_password or None,
+        password=(
+            settings.smtp_password.get_secret_value()
+            if settings.smtp_password
+            else None
+        ),
         use_tls=use_tls,
         start_tls=start_tls,
         timeout=SMTP_TIMEOUT_SECONDS,
     )
+
+
+def _brevo_payload(recipients: list[str], message: EmailMessage) -> dict:
+    # Recipients come from the list, not the To header, which EmailMessage folds
+    # with newlines once it is long. Keys are fixed: nothing from the database
+    # or the token is spread into this.
+    sender_name, sender_email = parseaddr(settings.mail_from or "")
+    sender = {"email": sender_email}
+    if sender_name:
+        sender["name"] = sender_name
+    return {
+        "sender": sender,
+        "to": [{"email": recipient} for recipient in recipients],
+        "subject": str(message["Subject"]),
+        "textContent": message.get_content(),
+    }
+
+
+def _brevo_error_detail(response: httpx.Response) -> str:
+    """Brevo's error `code`, or a description of a body that is not Brevo's JSON.
+
+    Never the body text itself: a CDN or proxy page can echo request headers.
+    """
+    try:
+        body = json.loads(response.content[:BREVO_ERROR_BODY_LIMIT])
+    except ValueError:
+        body = None
+    code = body.get("code") if isinstance(body, dict) else None
+    if isinstance(code, str) and BREVO_ERROR_CODE.fullmatch(code):
+        return f"code {code!r}"
+    return "body: %s, %d bytes" % (
+        response.headers.get("content-type", "no content type"),
+        len(response.content),
+    )
+
+
+def _log_brevo_failure(response: httpx.Response) -> None:
+    status = response.status_code
+    detail = _brevo_error_detail(response)
+    if status == 401:
+        logger.error(
+            "Admin notification NOT sent: Brevo refused the credentials "
+            "(HTTP 401, %s). Check BREVO_API_KEY is an API key, not the SMTP "
+            "key, and that this server's IP is authorised in Brevo.",
+            detail,
+        )
+    elif status == 402 and detail == "code 'not_enough_credits'":
+        logger.error(
+            "Admin notification NOT sent: the Brevo account is out of sending "
+            "credits (HTTP 402, %s); the free plan has a daily cap.",
+            detail,
+        )
+    elif status in BREVO_PERMANENT_STATUSES:
+        logger.error(
+            "Admin notification NOT sent: Brevo rejected the request (HTTP %d, "
+            "%s). Retrying will not help; check MAIL_FROM is a sender verified "
+            "in Brevo.",
+            status,
+            detail,
+        )
+    else:
+        logger.error(
+            "Admin notification failed to send: Brevo returned HTTP %d (%s). "
+            "Sign-in was not affected.",
+            status,
+            detail,
+        )
+
+
+async def _deliver_api(
+    api_key: str, recipients: list[str], message: EmailMessage
+) -> bool:
+    """POST to Brevo. True once Brevo accepts it; False after logging why not.
+
+    Accepted is not delivered: Brevo answers 201 for an unverified sender and
+    drops the mail afterwards, visible only in its own logs.
+    """
+    if not _is_valid_api_key(api_key):
+        logger.error(
+            "Admin notification NOT sent: BREVO_API_KEY contains spaces, control "
+            "or non-ASCII characters. Re-paste it; the value is not logged."
+        )
+        return False
+
+    # Each setting is stated, not inherited: verification on, no redirects (they
+    # would forward the api-key header to the new host), no proxy env vars.
+    async with asyncio.timeout(BREVO_TIMEOUT_SECONDS):
+        async with httpx.AsyncClient(
+            verify=BREVO_SSL_CONTEXT,
+            follow_redirects=False,
+            trust_env=False,
+            timeout=BREVO_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                BREVO_SEND_URL,
+                headers={"api-key": api_key, "accept": "application/json"},
+                json=_brevo_payload(recipients, message),
+            )
+
+    if response.is_success:
+        return True
+    _log_brevo_failure(response)
+    return False
 
 
 async def send_new_user_notification(
@@ -123,39 +270,54 @@ async def send_new_user_notification(
             return
 
         message = _build_message(recipients, name, email)
+        # Chosen before the dry-run return so dry-run can say which would run.
+        api_key = _brevo_api_key()
+        transport = TRANSPORT_API if api_key else TRANSPORT_SMTP
 
         if settings.mail_dry_run:
             # Dry run writes to stdout so a developer running the app with no
             # credentials can see exactly what would have been delivered.
-            print("--- MAIL_DRY_RUN: admin notification not sent ---")
+            print(
+                "--- MAIL_DRY_RUN: admin notification not sent "
+                f"(transport: {transport}) ---"
+            )
             print(message)
             return
 
-        missing = _missing_config()
+        missing = _missing_config(transport)
         if missing:
-            # A production misconfiguration must be loud. Because the SMTP
+            # A production misconfiguration must be loud. Because the mail
             # settings are optional-absent, the alternative is a silent
             # no-send that looks identical to "nobody signed up."
             logger.error(
-                "Admin notification NOT sent: missing SMTP configuration (%s). "
+                "Admin notification NOT sent: missing %s configuration (%s). "
                 "Set these or enable MAIL_DRY_RUN for local development.",
+                "mail" if transport == TRANSPORT_API else "SMTP",
                 ", ".join(missing),
             )
             return
 
-        tls_mode = _tls_mode()
-        if tls_mode is None:
-            # Present but unrecognized. Distinct from absent, and distinct from
-            # a relay failure: neither retrying nor waiting fixes a typo.
-            logger.error(
-                "Admin notification NOT sent: SMTP_TLS=%r is not one of %s.",
-                settings.smtp_tls,
-                ", ".join(sorted(TLS_MODES)),
-            )
-            return
+        if api_key:
+            if not await _deliver_api(api_key, recipients, message):
+                return
+        else:
+            tls_mode = _tls_mode()
+            if tls_mode is None:
+                # Present but unrecognized. Distinct from absent, and distinct
+                # from a relay failure: neither retrying nor waiting fixes a typo.
+                logger.error(
+                    "Admin notification NOT sent: SMTP_TLS=%r is not one of %s.",
+                    settings.smtp_tls,
+                    ", ".join(sorted(TLS_MODES)),
+                )
+                return
+            await _deliver(message, tls_mode)
 
-        await _deliver(message, tls_mode)
-        logger.info("Admin notification sent to %d recipient(s).", len(recipients))
+        logger.info(
+            "Admin notification sent to %d recipient(s) via %s.",
+            len(recipients),
+            transport,
+        )
     except Exception:
         logger.exception(
             "Admin notification failed to send. Sign-in was not affected."

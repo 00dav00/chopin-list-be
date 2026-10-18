@@ -1,7 +1,9 @@
+import json
 import os
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -16,6 +18,9 @@ os.environ.setdefault("MONGO_DB", TEST_DB_NAME)
 # a literal. `setdefault` is not enough here: CI exports CHOPIN_LIST_FE_URL,
 # which would otherwise win and break the CORS preflight contract test.
 os.environ["CHOPIN_LIST_FE_URL"] = "http://chopin-test-fe.invalid"
+# Unset, not blanked: a real key in a developer's .env would otherwise switch
+# every notification test onto the live Brevo API.
+os.environ.pop("BREVO_API_KEY", None)
 
 from app.auth import get_current_user  # noqa: E402
 from app.db import get_db  # noqa: E402
@@ -75,3 +80,43 @@ async def client(app):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_http(monkeypatch):
+    """Fail any real outbound HTTP request made through httpx.
+
+    Patches the network transport class only. ASGITransport, which every router
+    test's client uses, is a separate class and is untouched.
+    """
+
+    async def refuse(transport, request):
+        raise AssertionError(f"real outbound HTTP in a test: {request.url}")
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", refuse)
+
+
+class FakeBrevo:
+    """Stands in for the network: records requests, answers with `respond`."""
+
+    def __init__(self):
+        self.requests: list[httpx.Request] = []
+        self.respond = lambda request: httpx.Response(
+            201, json={"messageId": "<test@smtp-relay.mailin.fr>"}
+        )
+
+    def payload(self, index: int = 0) -> dict:
+        return json.loads(self.requests[index].content)
+
+
+@pytest.fixture
+def brevo_api(monkeypatch):
+    """Opt in to outbound HTTP, answered by a FakeBrevo instead of the network."""
+    fake = FakeBrevo()
+
+    async def handle(transport, request):
+        fake.requests.append(request)
+        return fake.respond(request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle)
+    return fake

@@ -15,6 +15,9 @@ services:
       # published port; inside the network it is the service name. Same split
       # as MONGO_URI in docker-compose.yml.
       SMTP_HOST: mailpit
+      # A key in .env would select the Brevo API and mail real admins from a
+      # laptop. Blank means absent; opt in with docker-compose.brevo.yml.
+      BREVO_API_KEY: ""
 
   # Local fake inbox: captures mail instead of delivering it, and serves a web
   # UI on http://localhost:8025. Speaks plaintext SMTP only, hence SMTP_TLS=none.

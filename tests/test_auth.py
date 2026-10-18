@@ -1,8 +1,10 @@
 import asyncio
 import logging
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import SecretStr
 
 from app import auth, notifications
 
@@ -272,6 +274,7 @@ async def test_broken_smtp_still_yields_403_not_5xx(
     # on missing config and never reaches the relay this test exists to break.
     monkeypatch.setattr(notifications.settings, "smtp_tls", "starttls")
     monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", None)
 
     async def explode(*args, **kwargs):
         raise ConnectionRefusedError("relay is down")
@@ -289,4 +292,32 @@ async def test_broken_smtp_still_yields_403_not_5xx(
         for task in set(notifications._pending_sends):
             await task
 
+    assert "Admin notification failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_broken_brevo_api_still_yields_403_not_5xx(
+    db, google_payload, monkeypatch, brevo_api, caplog
+):
+    """AC: an unreachable Brevo API must not change the auth outcome."""
+    await db.users.insert_one({"email": "admin@example.com", "admin": True})
+    monkeypatch.setattr(notifications.settings, "mail_dry_run", False)
+    monkeypatch.setattr(notifications.settings, "brevo_api_key", SecretStr("xkeysib-t"))
+    monkeypatch.setattr(notifications.settings, "mail_from", "no-reply@example.com")
+
+    def explode(request):
+        raise httpx.ConnectError("api is down")
+
+    brevo_api.respond = explode
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(HTTPException) as exc:
+            await auth.get_current_user(authorization="Bearer valid", db=db)
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "Account pending approval."
+
+        for task in set(notifications._pending_sends):
+            await task
+
+    assert len(brevo_api.requests) == 1
     assert "Admin notification failed" in caplog.text
