@@ -208,3 +208,20 @@ class ReorderGroups(BaseSchema):
 
     model_config = ConfigDict(extra="forbid")
     group_ids: list[str]
+
+
+class UnmatchedItemOut(BaseSchema):
+    item_id: str
+    name: str
+
+
+class ListGroupingOut(BaseSchema):
+    items: list[ItemOut]
+    run_id: Optional[str] = None
+    unmatched: list[UnmatchedItemOut] = Field(default_factory=list)
+
+
+class TemplateGroupingOut(BaseSchema):
+    items: list[TemplateItemOut]
+    run_id: Optional[str] = None
+    unmatched: list[UnmatchedItemOut] = Field(default_factory=list)
