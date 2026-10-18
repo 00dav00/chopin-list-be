@@ -254,6 +254,24 @@ async def test_item_bought_during_wait_stays_bought(db, fake_classifier):
 
 
 @pytest.mark.asyncio
+async def test_other_item_ticked_during_wait_is_not_offered_to_admins(db, fake_classifier):
+    await seed_groups(db, "Fruit")
+    list_id = await make_list(db)
+    card = await add_item(db, list_id, "birthday card", 0)
+    await add_item(db, list_id, "apples", 1)
+    fake_classifier.assignments = {"apples": "Fruit"}
+
+    async def edits():
+        await db.items.update_one({"_id": ObjectId(card)}, {"$set": {"purchased": True}})
+
+    result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
+
+    assert names(result) == ["apples", "birthday card"]
+    assert result["unmatched"] == []
+    assert result["run_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_item_deleted_during_wait_is_dropped(db, fake_classifier):
     await seed_groups(db, "Fruit")
     list_id = await make_list(db)

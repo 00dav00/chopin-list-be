@@ -119,7 +119,9 @@ async def group_items(db, target: GroupingTarget) -> dict:
     if operations:
         await db[target.items_collection].bulk_write(operations)
     if target.touch is not None:
-        await target.touch(now)
+        # Fresh timestamp: an edit landing after `now` would otherwise win the
+        # $max and leave other tabs on a version from before the regroup.
+        await target.touch(utcnow())
 
     run_id = None
     if unmatched:

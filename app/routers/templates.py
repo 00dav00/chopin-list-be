@@ -380,20 +380,21 @@ async def create_list_from_template(
     if template_items:
         item_docs = []
         for item in template_items:
-            item_docs.append(
-                {
-                    "user_id": current_user["id"],
-                    "list_id": list_id,
-                    "name": item.get("name"),
-                    "qty": item.get("qty"),
-                    "sort_order": item.get("sort_order", 0),
-                    "group_id": item.get("group_id"),
-                    "purchased": False,
-                    "purchased_at": None,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
+            item_doc = {
+                "user_id": current_user["id"],
+                "list_id": list_id,
+                "name": item.get("name"),
+                "qty": item.get("qty"),
+                "sort_order": item.get("sort_order", 0),
+                "purchased": False,
+                "purchased_at": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            # Absent means never grouped; null means grouped into "Other".
+            if "group_id" in item:
+                item_doc["group_id"] = item["group_id"]
+            item_docs.append(item_doc)
         # Templates bulk-insert exception to the mark_list_touched invariant.
         # We deliberately do NOT call mark_list_touched here. Rationale:
         # the list_doc itself was just inserted above with updated_at = now,
