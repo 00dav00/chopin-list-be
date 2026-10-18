@@ -357,3 +357,22 @@ async def test_create_list_from_template_copies_group_id(client, db):
 
     items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
     assert [item["group_id"] for item in items] == ["group-dairy"]
+
+
+@pytest.mark.asyncio
+async def test_create_list_from_template_leaves_never_grouped_items_without_group_id(
+    client, db
+):
+    template = await create_template(
+        client, items=[{"name": "card", "sort_order": 0}, {"name": "milk", "sort_order": 1}]
+    )
+    await db.template_items.update_one(
+        {"template_id": template["id"], "name": "card"}, {"$set": {"group_id": None}}
+    )
+
+    response = await client.post(f"/templates/{template['id']}/create-list", json={})
+
+    items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
+    by_name = {item["name"]: item for item in items}
+    assert by_name["card"]["group_id"] is None
+    assert "group_id" not in by_name["milk"]
