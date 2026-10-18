@@ -1,29 +1,17 @@
-"""Assigns shopping items to admin-managed groups with a language model on Bedrock.
+"""Assigns shopping items to admin-managed groups with a language model.
 
-The only module that talks to Bedrock. Callers get one group index per item, or
-None for "Other", and never see provider details.
+Builds the prompt and parses the answer; app/bedrock.py makes the call. Callers
+get one group index per item, or None for "Other", and never see provider details.
 """
 
-import asyncio
 import json
 import logging
 import unicodedata
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
-
-from .config import settings
+from . import bedrock
 
 logger = logging.getLogger(__name__)
 
-# Tuning knobs are constants, not env vars (team convention #5). AWS lists this
-# model's end of life as no sooner than 2026-12-02; swapping it is a one-line change.
-BEDROCK_MODEL_ID = "mistral.mistral-large-3-675b-instruct"
-BEDROCK_REGION = "eu-west-2"
-CONNECT_TIMEOUT_SECONDS = 3
-READ_TIMEOUT_SECONDS = 20
-CLASSIFY_TIMEOUT_SECONDS = 25.0
 # Sized for the 100-item cap: each {"i": n, "g": n} pair is roughly 12-14 tokens.
 MAX_OUTPUT_TOKENS = 2000
 ITEM_NAME_MAX_CHARS = 200
@@ -46,9 +34,6 @@ class ClassifierUnavailable(ClassifierError):
     """Bedrock credentials are not configured."""
 
 
-_client = None
-
-
 def clean_name(name: str) -> str:
     """Drops control characters and line breaks, collapses whitespace, caps length."""
     visible = "".join(
@@ -57,56 +42,12 @@ def clean_name(name: str) -> str:
     return " ".join(visible.split())[:ITEM_NAME_MAX_CHARS]
 
 
-def _credentials() -> tuple[str, str] | None:
-    key_id = (settings.aws_access_key_id or "").strip()
-    secret = settings.aws_secret_access_key
-    secret_value = secret.get_secret_value().strip() if secret else ""
-    if not key_id or not secret_value:
-        return None
-    return key_id, secret_value
-
-
-def _create_client(key_id: str, secret: str):
-    # Explicit credentials so stray AWS_* variables in the environment can't win.
-    return boto3.client(
-        "bedrock-runtime",
-        region_name=BEDROCK_REGION,
-        aws_access_key_id=key_id,
-        aws_secret_access_key=secret,
-        config=Config(
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            read_timeout=READ_TIMEOUT_SECONDS,
-            retries={"total_max_attempts": 1, "mode": "standard"},
-        ),
-    )
-
-
-def _get_client():
-    global _client
-    credentials = _credentials()
-    if credentials is None:
-        raise ClassifierUnavailable("Bedrock credentials are not configured.")
-    if _client is None:
-        _client = _create_client(*credentials)
-    return _client
-
-
-def _build_request(item_names: list[str], group_names: list[str]) -> dict:
+def build_payload(item_names: list[str], group_names: list[str]) -> str:
+    """The user message: numbered groups with "Other" last, and numbered items."""
     groups = [{"g": index, "name": name} for index, name in enumerate(group_names)]
     groups.append({"g": len(group_names), "name": "Other"})
     items = [{"i": index, "name": clean_name(name)} for index, name in enumerate(item_names)]
-    payload = json.dumps({"groups": groups, "items": items}, ensure_ascii=False)
-    return {
-        "modelId": BEDROCK_MODEL_ID,
-        "system": [{"text": SYSTEM_PROMPT}],
-        "messages": [{"role": "user", "content": [{"text": payload}]}],
-        "inferenceConfig": {"maxTokens": MAX_OUTPUT_TOKENS, "temperature": 0},
-    }
-
-
-def _response_text(response: dict) -> str:
-    blocks = response.get("output", {}).get("message", {}).get("content", [])
-    return "".join(block.get("text", "") for block in blocks)
+    return json.dumps({"groups": groups, "items": items}, ensure_ascii=False)
 
 
 def _load_json_object(text: str) -> dict | None:
@@ -154,26 +95,20 @@ async def classify(item_names: list[str], group_names: list[str]) -> list[int | 
     """One group index per item (None for "Other"), or ClassifierError."""
     if not item_names:
         return []
-    client = _get_client()
-    request = _build_request(item_names, group_names)
     try:
-        response = await asyncio.wait_for(
-            asyncio.to_thread(client.converse, **request), CLASSIFY_TIMEOUT_SECONDS
+        text = await bedrock.converse(
+            SYSTEM_PROMPT,
+            build_payload(item_names, group_names),
+            max_tokens=MAX_OUTPUT_TOKENS,
+            temperature=0,
         )
-    except asyncio.TimeoutError as exc:
-        logger.warning("Bedrock classify timed out after %ss", CLASSIFY_TIMEOUT_SECONDS)
-        raise ClassifierError("Model call timed out.") from exc
-    except ClientError as exc:
-        code = exc.response.get("Error", {}).get("Code", "unknown")
-        logger.warning("Bedrock classify failed: %s", code)
-        raise ClassifierError(f"Model call failed: {code}") from exc
-    except BotoCoreError as exc:
-        logger.warning("Bedrock classify failed: %s", type(exc).__name__)
-        raise ClassifierError("Model call failed.") from exc
+    except bedrock.BedrockUnavailable as exc:
+        raise ClassifierUnavailable(str(exc)) from exc
+    except bedrock.BedrockError as exc:
+        raise ClassifierError(str(exc)) from exc
 
-    text = _response_text(response)
     try:
         return parse_assignments(text, len(item_names), len(group_names))
     except ClassifierError:
-        logger.warning("Bedrock classify returned an unusable answer: %r", text[:2000])
+        logger.warning("Model returned an unusable answer: %r", text[:2000])
         raise

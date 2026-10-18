@@ -108,13 +108,13 @@ def block_outbound_http(monkeypatch):
 @pytest.fixture(autouse=True)
 def block_real_bedrock_client(monkeypatch):
     """Fail any attempt to build a real Bedrock client; tests inject their own."""
-    from app import classifier
+    from app import bedrock
 
     def refuse(*args, **kwargs):
         raise AssertionError("real Bedrock client created in a test")
 
-    monkeypatch.setattr(classifier, "_create_client", refuse)
-    monkeypatch.setattr(classifier, "_client", None)
+    monkeypatch.setattr(bedrock, "_create_client", refuse)
+    monkeypatch.setattr(bedrock, "_client", None)
 
 
 class FakeBrevo:
