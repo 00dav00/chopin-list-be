@@ -1,4 +1,4 @@
-"""Admin notification email for new access requests.
+"""Admin notification emails: new access requests and unmatched grocery items.
 
 Email is notification, not invariant: every failure here is logged and
 swallowed so it can never change the outcome of the request that triggered it.
@@ -11,7 +11,7 @@ import logging
 import re
 from email.message import EmailMessage
 from email.utils import parseaddr
-from typing import Optional
+from typing import Any, Callable, Coroutine, Optional
 
 import aiosmtplib
 import httpx
@@ -57,6 +57,8 @@ TLS_MODES = {
 # Hash-based routing on the frontend (svelte-spa-router), so the emailed link
 # must carry the "#". This is the FE route, NOT the backend API path.
 PENDING_USERS_FRAGMENT = "/#/admin/pending-users"
+UNMATCHED_ITEMS_FRAGMENT = "/#/admin/unmatched-items"
+UNMATCHED_ITEMS_SUBJECT = "Chopin List items that fit no group"
 
 # asyncio holds only a weak reference to a running task. Without a strong
 # reference the task can be garbage-collected mid-flight and the email silently
@@ -74,8 +76,22 @@ async def _recipients(db) -> list[str]:
     return [doc["email"] async for doc in cursor if doc.get("email")]
 
 
+def _frontend_link(fragment: str) -> str:
+    return f"{settings.chopin_list_fe_url.rstrip('/')}{fragment}"
+
+
 def _pending_users_link() -> str:
-    return f"{settings.chopin_list_fe_url.rstrip('/')}{PENDING_USERS_FRAGMENT}"
+    return _frontend_link(PENDING_USERS_FRAGMENT)
+
+
+def _build_email(recipients: list[str], subject: str, body: str) -> EmailMessage:
+    """Plain text only. Subjects are fixed literals, never user text."""
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = settings.mail_from or ""
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+    return message
 
 
 def _build_message(
@@ -83,20 +99,34 @@ def _build_message(
 ) -> EmailMessage:
     """Plain-text notification. No IDs, tokens, or internal vocabulary (#8)."""
     display_name = name or "Someone"
-    message = EmailMessage()
-    message["Subject"] = "New Chopin List access request"
-    message["From"] = settings.mail_from or ""
-    message["To"] = ", ".join(recipients)
-    message.set_content(
+    return _build_email(
+        recipients,
+        "New Chopin List access request",
         f"{display_name} has requested access to Chopin List.\n"
         f"\n"
         f"Name: {display_name}\n"
         f"Email: {email or 'unknown'}\n"
         f"\n"
         f"Review and approve access here:\n"
-        f"{_pending_users_link()}\n"
+        f"{_pending_users_link()}\n",
     )
-    return message
+
+
+def _build_unmatched_items_message(
+    recipients: list[str], names: list[str]
+) -> EmailMessage:
+    # Names are shopper text, already cleaned of line breaks by the caller, so
+    # each stays on its own line and cannot forge extra lines in the body.
+    listing = "\n".join(f"- {name}" for name in names)
+    return _build_email(
+        recipients,
+        UNMATCHED_ITEMS_SUBJECT,
+        "A shopper chose to share items that fit none of the current groups:\n"
+        f"\n{listing}\n"
+        "\n"
+        "Review them and add groups here:\n"
+        f"{_frontend_link(UNMATCHED_ITEMS_FRAGMENT)}\n",
+    )
 
 
 def _brevo_api_key() -> Optional[str]:
@@ -255,10 +285,10 @@ async def _deliver_api(
     return False
 
 
-async def send_new_user_notification(
-    db, name: Optional[str], email: Optional[str]
+async def _send_admin_email(
+    db, build: Callable[[list[str]], EmailMessage]
 ) -> None:
-    """Compose and send the admin notification. Never raises."""
+    """Compose with `build(recipients)` and send to every admin. Never raises."""
     try:
         recipients = await _recipients(db)
         if not recipients:
@@ -269,7 +299,7 @@ async def send_new_user_notification(
             )
             return
 
-        message = _build_message(recipients, name, email)
+        message = build(recipients)
         # Chosen before the dry-run return so dry-run can say which would run.
         api_key = _brevo_api_key()
         transport = TRANSPORT_API if api_key else TRANSPORT_SMTP
@@ -320,8 +350,43 @@ async def send_new_user_notification(
         )
     except Exception:
         logger.exception(
-            "Admin notification failed to send. Sign-in was not affected."
+            "Admin notification failed to send. The request that triggered it "
+            "was not affected."
         )
+
+
+async def send_new_user_notification(
+    db, name: Optional[str], email: Optional[str]
+) -> None:
+    await _send_admin_email(
+        db, lambda recipients: _build_message(recipients, name, email)
+    )
+
+
+async def send_unmatched_items_notification(db, names: list[str]) -> None:
+    await _send_admin_email(
+        db, lambda recipients: _build_unmatched_items_message(recipients, names)
+    )
+
+
+def _dispatch(send: Coroutine[Any, Any, None]) -> None:
+    """Fire-and-forget `send`. Returns immediately; never raises."""
+    try:
+        task = asyncio.create_task(send)
+    except RuntimeError:
+        # No running event loop (e.g. a synchronous call site). Nothing to do
+        # here that wouldn't block the caller, which is the one thing this
+        # module promises not to do.
+        send.close()
+        logger.exception("Admin notification could not be scheduled.")
+        return
+    _pending_sends.add(task)
+    task.add_done_callback(_pending_sends.discard)
+
+
+def dispatch_unmatched_items_notification(db, names: list[str]) -> None:
+    """Fire-and-forget; the send request has already recorded the names."""
+    _dispatch(send_unmatched_items_notification(db, names))
 
 
 def dispatch_new_user_notification(
@@ -335,13 +400,4 @@ def dispatch_new_user_notification(
     # dependency raises. Auth runs as a dependency and a first-time user's
     # request always raises 403, so a BackgroundTasks send would never fire for
     # the one case this exists to serve -- and would fail only in production.
-    try:
-        task = asyncio.create_task(send_new_user_notification(db, name, email))
-    except RuntimeError:
-        # No running event loop (e.g. a synchronous call site). Nothing to do
-        # here that wouldn't block the caller, which is the one thing this
-        # module promises not to do.
-        logger.exception("Admin notification could not be scheduled.")
-        return
-    _pending_sends.add(task)
-    task.add_done_callback(_pending_sends.discard)
+    _dispatch(send_new_user_notification(db, name, email))

@@ -9,6 +9,7 @@ This service stores data in MongoDB with these collections:
 - `template_items`
 - `groups`
 - `grouping_runs`
+- `unmatched_items`
 
 All API responses serialize Mongo `_id` to a string field named `id`.
 
@@ -171,6 +172,29 @@ Fields:
 Indexes:
 
 - TTL: `created_at ASC`, expires after 1 hour
+
+## Collection: `unmatched_items`
+
+Item names shoppers chose to share because they fit no group, for admins to
+review. Holds names only: no user, list or template reference.
+
+Fields:
+
+- `_id`: `ObjectId` (serialized as `id`)
+- `name`: `string` (cleaned of control characters and line breaks; latest spelling sent)
+- `name_key`: `string` (case-folded, whitespace collapsed)
+- `count`: `int` (number of sends that included this name while open)
+- `last_sent_at`: `datetime`
+- `created_at`: `datetime`
+- `resolved_at`: `datetime | null` (set when an admin creates a group from it or dismisses it)
+- `resolution`: `"group_created" | "dismissed" | null`
+
+Indexes:
+
+- unique partial: `name_key ASC` where `resolved_at` is null (one open entry per name)
+- compound: `(resolved_at ASC, last_sent_at DESC)`
+
+A name sent again after it was resolved opens a new entry; resolved entries are kept.
 
 ## Relationships and Lifecycle
 
