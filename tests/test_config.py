@@ -34,3 +34,24 @@ def test_secrets_are_not_in_the_settings_repr(monkeypatch):
 
     assert SENTINEL not in text
     assert "smtp-password-sentinel" not in text
+
+
+def test_aws_credentials_are_read_from_their_env_names(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "aws-key-id-sentinel")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret-sentinel")
+
+    loaded = Settings()
+
+    assert loaded.aws_access_key_id == "aws-key-id-sentinel"
+    assert loaded.aws_secret_access_key.get_secret_value() == "aws-secret-sentinel"
+    assert "aws-secret-sentinel" not in repr(loaded)
+
+
+def test_aws_credentials_absent_are_none(monkeypatch):
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+
+    loaded = Settings()
+
+    assert loaded.aws_access_key_id is None
+    assert loaded.aws_secret_access_key is None
