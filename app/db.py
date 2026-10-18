@@ -28,3 +28,5 @@ async def init_db() -> None:
     await db.template_items.create_index([("template_id", 1), ("sort_order", 1)])
     await db.groups.create_index("name_key", unique=True)
     await db.groups.create_index("position")
+    # Unsent grouping runs are only useful for a short while after the tap.
+    await db.grouping_runs.create_index("created_at", expireAfterSeconds=3600)

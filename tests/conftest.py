@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -115,6 +116,44 @@ def block_real_bedrock_client(monkeypatch):
 
     monkeypatch.setattr(classifier, "_create_client", refuse)
     monkeypatch.setattr(classifier, "_client", None)
+
+
+class FakeClassifier:
+    """Stands in for app.classifier.classify; assigns groups by item name.
+
+    Set `gate` to an asyncio.Event to hold the answer until the test sets it;
+    `entered` fires once the call is in flight, so edits land "during the wait".
+    """
+
+    def __init__(self):
+        self.assignments: dict[str, str] = {}
+        self.calls: list[tuple[list[str], list[str]]] = []
+        self.error: Exception | None = None
+        self.gate: asyncio.Event | None = None
+        self.entered = asyncio.Event()
+
+    async def classify(self, item_names, group_names):
+        self.calls.append((list(item_names), list(group_names)))
+        self.entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.error is not None:
+            raise self.error
+        return [
+            group_names.index(self.assignments[name])
+            if self.assignments.get(name) in group_names
+            else None
+            for name in item_names
+        ]
+
+
+@pytest.fixture
+def fake_classifier(monkeypatch):
+    from app import classifier
+
+    fake = FakeClassifier()
+    monkeypatch.setattr(classifier, "classify", fake.classify)
+    return fake
 
 
 class FakeBrevo:
