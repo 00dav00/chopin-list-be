@@ -9,6 +9,11 @@ from .notifications import dispatch_new_user_notification
 from .utils import serialize_doc, utcnow
 
 
+def require_admin(current_user: dict):
+    if not current_user.get("admin", False):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+
+
 async def get_current_user(
     authorization: str | None = Header(default=None),
     db=Depends(get_db),

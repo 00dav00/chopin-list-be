@@ -3,17 +3,12 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import ReturnDocument
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_admin
 from ..db import get_db
 from ..schemas import ConfirmedUserOut, DashboardSummary, PendingUserOut, UserOut
 from ..utils import serialize_doc
 
 router = APIRouter(prefix="/me", tags=["users"])
-
-
-def require_admin(current_user: dict):
-    if not current_user.get("admin", False):
-        raise HTTPException(status_code=403, detail="Admin access required.")
 
 
 def to_user_object_id(user_id: str) -> ObjectId:

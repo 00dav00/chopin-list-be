@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class BaseSchema(BaseModel):
@@ -172,3 +172,35 @@ class DashboardSummary(BaseSchema):
 class CreateListFromTemplate(BaseSchema):
     model_config = ConfigDict(extra="forbid")
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+GROUP_NAME_MAX_LENGTH = 60
+
+
+def collapse_whitespace(value):
+    return " ".join(value.split()) if isinstance(value, str) else value
+
+
+class GroupCreate(BaseSchema):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=GROUP_NAME_MAX_LENGTH)
+
+    _collapse_name = field_validator("name", mode="before")(collapse_whitespace)
+
+
+class GroupUpdate(GroupCreate):
+    pass
+
+
+class GroupOut(BaseSchema):
+    id: str
+    name: str
+    position: int
+    built_in: bool = False
+
+
+class ReorderGroups(BaseSchema):
+    """Full set of stored group ids in the new order; "Other" is never included."""
+
+    model_config = ConfigDict(extra="forbid")
+    group_ids: list[str]
