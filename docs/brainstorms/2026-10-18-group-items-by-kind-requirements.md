@@ -43,7 +43,7 @@ Ordering groups to match one particular store's layout is a separate, later capa
 - F2. Admin turns an unmatched item into a group
   - **Trigger:** Admin opens the unmatched-items screen (for example, after an email).
   - **Actors:** A2
-  - **Steps:** Admin sees each unmatched name once, with how many times it was seen and when it was last seen. Admin taps a name. A new-group form opens with the name pre-filled. Admin edits the name if needed and chooses where the group sits in the order, then saves.
+  - **Steps:** Admin sees each unmatched name once, with how many times it was seen and when it was last seen. Admin taps a name. A new-group form opens with the name pre-filled. Admin edits the name if needed, then saves. The new group goes at the end of the order (just before "Other"), and the admin can move it afterwards.
   - **Outcome:** The new group exists, and the name leaves the unmatched list. Existing lists don't change until a shopper taps the button again.
   - **Escape path:** Admin dismisses the name without creating a group.
   - **Covered by:** R13, R14
@@ -70,7 +70,7 @@ Ordering groups to match one particular store's layout is a separate, later capa
 
 **Unmatched items (admin)**
 - R13. Item names that the shopper chose to send (R15) are recorded. An admin screen lists each name once, with how many times it was sent and when it was last sent.
-- R14. From that screen an admin can tap a name to create a new group pre-filled with that name, edit the name, and choose its position in the order. The name then leaves the unmatched list. An admin can also dismiss a name without creating a group.
+- R14. From that screen an admin can tap a name to create a new group pre-filled with that name, and edit the name. The new group is added at the end of the order, just before "Other". The name then leaves the unmatched list. An admin can also dismiss a name without creating a group.
 - R15. When a tap leaves at least one item in "Other", the shopper who tapped (and only that shopper) sees a message listing those items and asking whether to send them to the admins for checking. Sending is all-or-nothing for that tap. If the shopper confirms, the names are recorded (R13) and all admins get an email listing them. If the shopper declines or closes the message, nothing is recorded or emailed. The grouping itself is already applied either way.
 - R16. What admins receive, in the email and on the screen, is the item names only: not who sent them or which list they came from.
 
