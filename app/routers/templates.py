@@ -8,6 +8,7 @@ from ..schemas import (
     ListOut,
     ReorderItems,
     TemplateCreate,
+    TemplateGroupingOut,
     TemplateDetailOut,
     TemplateItemCreate,
     TemplateItemOut,
@@ -15,6 +16,7 @@ from ..schemas import (
     TemplateOut,
     TemplateUpdate,
 )
+from ..grouping import GroupingTarget, group_items
 from ..utils import serialize_doc, to_object_id, utcnow
 
 router = APIRouter(prefix="/templates", tags=["templates"])
@@ -320,6 +322,31 @@ async def reorder_template_items(
     return [serialize_doc(doc) for doc in docs]
 
 
+@router.post("/{template_id}/group", response_model=TemplateGroupingOut)
+async def group_template_items(
+    template_id: str,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    user_id = current_user["id"]
+
+    async def ensure_editable():
+        await _get_template_or_404(db, template_id, user_id)
+
+    # Templates have no version for other views to poll, so nothing to touch.
+    return await group_items(
+        db,
+        GroupingTarget(
+            kind="template",
+            target_id=template_id,
+            user_id=user_id,
+            items_collection="template_items",
+            parent_field="template_id",
+            ensure_editable=ensure_editable,
+        ),
+    )
+
+
 @router.post(
     "/{template_id}/create-list",
     response_model=ListOut,
@@ -352,19 +379,21 @@ async def create_list_from_template(
     if template_items:
         item_docs = []
         for item in template_items:
-            item_docs.append(
-                {
-                    "user_id": current_user["id"],
-                    "list_id": list_id,
-                    "name": item.get("name"),
-                    "qty": item.get("qty"),
-                    "sort_order": item.get("sort_order", 0),
-                    "purchased": False,
-                    "purchased_at": None,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            )
+            item_doc = {
+                "user_id": current_user["id"],
+                "list_id": list_id,
+                "name": item.get("name"),
+                "qty": item.get("qty"),
+                "sort_order": item.get("sort_order", 0),
+                "purchased": False,
+                "purchased_at": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            # Absent means never grouped; "Other" is stored like any group name.
+            if "group_name" in item:
+                item_doc["group_name"] = item["group_name"]
+            item_docs.append(item_doc)
         # Templates bulk-insert exception to the mark_list_touched invariant.
         # We deliberately do NOT call mark_list_touched here. Rationale:
         # the list_doc itself was just inserted above with updated_at = now,
