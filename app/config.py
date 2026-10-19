@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # SMTP key: the two are separate Brevo credentials and neither works for the
     # other.
     brevo_api_key: SecretStr | None = Field(default=None, alias="BREVO_API_KEY")
+    # Bedrock credentials for "Group by kind". Absent or blank means grouping is
+    # unavailable; timeouts live in app/bedrock.py.
+    aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: SecretStr | None = Field(
+        default=None, alias="AWS_SECRET_ACCESS_KEY"
+    )
+    # Defaults requested explicitly. AWS lists this model's end of life as no
+    # sooner than 2026-12-02.
+    bedrock_model_id: str = Field(
+        default="mistral.mistral-large-3-675b-instruct", alias="BEDROCK_MODEL_ID"
+    )
+    bedrock_region: str = Field(default="eu-west-2", alias="BEDROCK_REGION")
 
 
 settings = Settings()

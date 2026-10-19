@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import init_db
-from .routers import items, lists, templates, users
+from .routers import groups, items, lists, templates, users
 
 
 @asynccontextmanager
@@ -33,3 +33,4 @@ app.include_router(users.router)
 app.include_router(lists.router)
 app.include_router(items.router)
 app.include_router(templates.router)
+app.include_router(groups.router)

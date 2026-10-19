@@ -21,6 +21,15 @@ os.environ["CHOPIN_LIST_FE_URL"] = "http://chopin-test-fe.invalid"
 # Unset, not blanked: a real key in a developer's .env would otherwise switch
 # every notification test onto the live Brevo API.
 os.environ.pop("BREVO_API_KEY", None)
+# Same for Bedrock: no test may reach the real model, whatever .env holds.
+for _aws_var in (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_PROFILE",
+):
+    os.environ.pop(_aws_var, None)
 
 from app.auth import get_current_user  # noqa: E402
 from app.db import get_db  # noqa: E402
@@ -94,6 +103,18 @@ def block_outbound_http(monkeypatch):
         raise AssertionError(f"real outbound HTTP in a test: {request.url}")
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", refuse)
+
+
+@pytest.fixture(autouse=True)
+def block_real_bedrock_client(monkeypatch):
+    """Fail any attempt to build a real Bedrock client; tests inject their own."""
+    from app import bedrock
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("real Bedrock client created in a test")
+
+    monkeypatch.setattr(bedrock, "_create_client", refuse)
+    monkeypatch.setattr(bedrock, "_client", None)
 
 
 class FakeBrevo:

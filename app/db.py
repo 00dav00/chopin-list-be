@@ -26,3 +26,5 @@ async def init_db() -> None:
     await db.templates.create_index([("user_id", 1), ("updated_at", -1)])
     await db.template_items.create_index([("user_id", 1), ("template_id", 1)])
     await db.template_items.create_index([("template_id", 1), ("sort_order", 1)])
+    await db.groups.create_index("name_key", unique=True)
+    await db.groups.create_index("position")
