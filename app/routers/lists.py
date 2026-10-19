@@ -354,7 +354,6 @@ async def group_list_items(
             user_id=user_id,
             items_collection="items",
             parent_field="list_id",
-            has_purchased=True,
             ensure_editable=ensure_editable,
             touch=touch,
         ),

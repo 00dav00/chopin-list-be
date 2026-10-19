@@ -342,7 +342,6 @@ async def group_template_items(
             user_id=user_id,
             items_collection="template_items",
             parent_field="template_id",
-            has_purchased=False,
             ensure_editable=ensure_editable,
         ),
     )

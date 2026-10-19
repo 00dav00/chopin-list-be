@@ -504,20 +504,22 @@ async def _seed_groups(db, *names):
 @pytest.mark.asyncio
 async def test_group_list_orders_items_and_reports_unmatched(client, db, fake_classifier):
     # Covers AE1 end to end.
-    await _seed_groups(db, "Fruit", "Meat", "Dairy")
+    await _seed_groups(db, "Fruit", "Meat", "Dairy", "Bakery")
     created = await create_list(client)
     for position, name in enumerate(["milk", "apples", "birthday card", "chicken"]):
         await create_item(client, created["id"], name=name, sort_order=position)
     bread = await create_item(client, created["id"], name="bread", sort_order=4)
     await client.post(f"/items/{bread['id']}/toggle")
-    fake_classifier.assignments = {"milk": "Dairy", "apples": "Fruit", "chicken": "Meat"}
+    fake_classifier.assignments = {
+        "milk": "Dairy", "apples": "Fruit", "chicken": "Meat", "bread": "Bakery",
+    }
 
     response = await client.post(f"/lists/{created['id']}/group")
 
     assert response.status_code == 200
     body = response.json()
     assert [item["name"] for item in body["items"]] == [
-        "apples", "chicken", "milk", "birthday card", "bread",
+        "apples", "chicken", "milk", "bread", "birthday card",
     ]
     assert [entry["name"] for entry in body["unmatched"]] == ["birthday card"]
     assert body["run_id"]
@@ -558,8 +560,8 @@ async def test_group_list_keeps_edits_from_another_device(client, db, fake_class
 
     assert response.status_code == 200
     items = response.json()["items"]
-    assert [item["name"] for item in items] == ["apples", "eggs", "milk"]
-    assert [item["purchased"] for item in items] == [False, False, True]
+    assert [item["name"] for item in items] == ["apples", "milk", "eggs"]
+    assert [item["purchased"] for item in items] == [False, True, False]
 
 
 @pytest.mark.asyncio

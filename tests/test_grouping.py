@@ -63,7 +63,6 @@ def list_target(db, list_id, touches=None):
         user_id=USER_ID,
         items_collection="items",
         parent_field="list_id",
-        has_purchased=True,
         ensure_editable=ensure_editable,
         touch=touch,
     )
@@ -94,21 +93,27 @@ async def run_with_edits(db, target, fake, edits):
 
 
 @pytest.mark.asyncio
-async def test_groups_unbought_items_in_group_order_with_other_last(db, fake_classifier):
-    # Covers AE1.
+async def test_groups_bought_and_unbought_items_in_one_group_order_with_other_last(
+    db, fake_classifier
+):
+    # Covers AE1, extended to bought items.
     groups = await seed_groups(db, "Fruit", "Meat", "Dairy")
     list_id = await make_list(db)
     await add_item(db, list_id, "milk", 0)
     await add_item(db, list_id, "apples", 1)
     card = await add_item(db, list_id, "birthday card", 2)
     await add_item(db, list_id, "chicken", 3)
-    await add_item(db, list_id, "bread", 4, purchased=True)
-    fake_classifier.assignments = {"milk": "Dairy", "apples": "Fruit", "chicken": "Meat"}
+    await add_item(db, list_id, "cheese", 4, purchased=True)
+    await add_item(db, list_id, "pears", 5, purchased=True)
+    fake_classifier.assignments = {
+        "milk": "Dairy", "apples": "Fruit", "chicken": "Meat",
+        "cheese": "Dairy", "pears": "Fruit",
+    }
 
     result = await group_items(db, list_target(db, list_id))
 
-    assert names(result) == ["apples", "chicken", "milk", "birthday card", "bread"]
-    assert [item["sort_order"] for item in result["items"]] == [0, 1, 2, 3, 4]
+    assert names(result) == ["apples", "pears", "chicken", "milk", "cheese", "birthday card"]
+    assert [item["sort_order"] for item in result["items"]] == [0, 1, 2, 3, 4, 5]
     assert result["unmatched"] == [{"item_id": card, "name": "birthday card"}]
     run = await db.grouping_runs.find_one({"_id": ObjectId(result["run_id"])})
     assert run["user_id"] == USER_ID
@@ -120,11 +125,12 @@ async def test_groups_unbought_items_in_group_order_with_other_last(db, fake_cla
     assert docs["milk"]["group_id"] == groups["Dairy"]
     assert docs["apples"]["group_id"] == groups["Fruit"]
     assert docs["birthday card"]["group_id"] is None
-    assert "group_id" not in docs["bread"]
+    assert docs["cheese"]["group_id"] == groups["Dairy"]
+    assert docs["pears"]["group_id"] == groups["Fruit"]
 
 
 @pytest.mark.asyncio
-async def test_only_unbought_names_are_sent_to_the_model(db, fake_classifier):
+async def test_bought_names_are_sent_to_the_model_too(db, fake_classifier):
     await seed_groups(db, "Fruit", "Dairy")
     list_id = await make_list(db)
     await add_item(db, list_id, "milk", 0)
@@ -132,7 +138,34 @@ async def test_only_unbought_names_are_sent_to_the_model(db, fake_classifier):
 
     await group_items(db, list_target(db, list_id))
 
-    assert fake_classifier.calls == [(["milk"], ["Fruit", "Dairy"])]
+    assert fake_classifier.calls == [(["milk", "bread"], ["Fruit", "Dairy"])]
+
+
+@pytest.mark.asyncio
+async def test_bought_item_in_other_is_offered_to_admins(db, fake_classifier):
+    await seed_groups(db, "Fruit")
+    list_id = await make_list(db)
+    await add_item(db, list_id, "apples", 0)
+    card = await add_item(db, list_id, "birthday card", 1, purchased=True)
+    fake_classifier.assignments = {"apples": "Fruit"}
+
+    result = await group_items(db, list_target(db, list_id))
+
+    assert result["unmatched"] == [{"item_id": card, "name": "birthday card"}]
+    assert (await stored(db, list_id))["birthday card"]["group_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_with_only_bought_items_is_grouped(db, fake_classifier):
+    await seed_groups(db, "Fruit", "Dairy")
+    list_id = await make_list(db)
+    await add_item(db, list_id, "milk", 0, purchased=True)
+    await add_item(db, list_id, "apples", 1, purchased=True)
+    fake_classifier.assignments = {"milk": "Dairy", "apples": "Fruit"}
+
+    result = await group_items(db, list_target(db, list_id))
+
+    assert names(result) == ["apples", "milk"]
 
 
 @pytest.mark.asyncio
@@ -216,7 +249,7 @@ async def test_list_version_is_touched_once(db, fake_classifier):
 
 
 @pytest.mark.asyncio
-async def test_item_added_during_wait_goes_to_end_of_unbought(db, fake_classifier):
+async def test_item_added_during_wait_goes_to_the_end(db, fake_classifier):
     await seed_groups(db, "Fruit", "Dairy")
     list_id = await make_list(db)
     await add_item(db, list_id, "milk", 0)
@@ -229,12 +262,12 @@ async def test_item_added_during_wait_goes_to_end_of_unbought(db, fake_classifie
 
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
-    assert names(result) == ["apples", "milk", "eggs", "bread"]
+    assert names(result) == ["apples", "milk", "bread", "eggs"]
     assert "group_id" not in (await stored(db, list_id))["eggs"]
 
 
 @pytest.mark.asyncio
-async def test_item_bought_during_wait_stays_bought(db, fake_classifier):
+async def test_item_bought_during_wait_keeps_its_group_place(db, fake_classifier):
     # Covers AE9 (same user on another device).
     await seed_groups(db, "Fruit", "Dairy")
     list_id = await make_list(db)
@@ -249,12 +282,12 @@ async def test_item_bought_during_wait_stays_bought(db, fake_classifier):
 
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
-    assert names(result) == ["apples", "eggs", "milk", "bread"]
-    assert "group_id" not in (await stored(db, list_id))["milk"]
+    assert names(result) == ["apples", "milk", "bread", "eggs"]
+    assert (await stored(db, list_id))["milk"]["purchased"] is True
 
 
 @pytest.mark.asyncio
-async def test_other_item_ticked_during_wait_is_not_offered_to_admins(db, fake_classifier):
+async def test_other_item_ticked_during_wait_is_still_offered_to_admins(db, fake_classifier):
     await seed_groups(db, "Fruit")
     list_id = await make_list(db)
     card = await add_item(db, list_id, "birthday card", 0)
@@ -267,8 +300,7 @@ async def test_other_item_ticked_during_wait_is_not_offered_to_admins(db, fake_c
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
     assert names(result) == ["apples", "birthday card"]
-    assert result["unmatched"] == []
-    assert result["run_id"] is None
+    assert result["unmatched"] == [{"item_id": card, "name": "birthday card"}]
 
 
 @pytest.mark.asyncio
@@ -307,20 +339,35 @@ async def test_item_renamed_during_wait_is_placed_by_its_old_name(db, fake_class
 
 
 @pytest.mark.asyncio
-async def test_item_unticked_during_wait_goes_to_end_unclassified(db, fake_classifier):
-    await seed_groups(db, "Fruit")
+async def test_item_unticked_during_wait_keeps_its_group_place(db, fake_classifier):
+    groups = await seed_groups(db, "Bakery", "Fruit")
     list_id = await make_list(db)
-    bread = await add_item(db, list_id, "bread", 0, purchased=True)
-    await add_item(db, list_id, "apples", 1)
-    fake_classifier.assignments = {"apples": "Fruit"}
+    await add_item(db, list_id, "apples", 0)
+    bread = await add_item(db, list_id, "bread", 1, purchased=True)
+    fake_classifier.assignments = {"apples": "Fruit", "bread": "Bakery"}
 
     async def edits():
         await db.items.update_one({"_id": ObjectId(bread)}, {"$set": {"purchased": False}})
 
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
-    assert names(result) == ["apples", "bread"]
-    assert "group_id" not in (await stored(db, list_id))["bread"]
+    assert names(result) == ["bread", "apples"]
+    assert (await stored(db, list_id))["bread"]["group_id"] == groups["Bakery"]
+
+
+@pytest.mark.asyncio
+async def test_bought_item_sits_between_unbought_items_of_other_groups(db, fake_classifier):
+    # Unticking it later must put it back in its group, not after every unbought item.
+    await seed_groups(db, "Fruit", "Dairy")
+    list_id = await make_list(db)
+    await add_item(db, list_id, "milk", 0)
+    await add_item(db, list_id, "pears", 1, purchased=True)
+    await add_item(db, list_id, "apples", 2)
+    fake_classifier.assignments = {"milk": "Dairy", "pears": "Fruit", "apples": "Fruit"}
+
+    result = await group_items(db, list_target(db, list_id))
+
+    assert names(result) == ["pears", "apples", "milk"]
 
 
 @pytest.mark.asyncio
@@ -396,17 +443,25 @@ async def test_classifier_failure_returns_503_and_changes_nothing(db, fake_class
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("setup", "status_code"),
-    [("only_bought", 422), ("empty", 422), ("too_many", 422), ("no_groups", 409), ("completed", 409)],
+    [
+        ("empty", 422),
+        ("too_many", 422),
+        ("too_many_with_bought", 422),
+        ("no_groups", 409),
+        ("completed", 409),
+    ],
 )
 async def test_refusals_never_call_the_model(db, fake_classifier, setup, status_code):
     if setup != "no_groups":
         await seed_groups(db, "Fruit")
     list_id = await make_list(db, completed=setup == "completed")
-    if setup == "only_bought":
-        await add_item(db, list_id, "bread", 0, purchased=True)
-    elif setup == "too_many":
+    if setup == "too_many":
         for index in range(MAX_GROUPING_ITEMS + 1):
             await add_item(db, list_id, f"item {index}", index)
+    elif setup == "too_many_with_bought":
+        for index in range(MAX_GROUPING_ITEMS):
+            await add_item(db, list_id, f"item {index}", index)
+        await add_item(db, list_id, "bought", MAX_GROUPING_ITEMS, purchased=True)
     elif setup != "empty":
         await add_item(db, list_id, "apples", 0)
 
@@ -421,10 +476,10 @@ async def test_refusals_never_call_the_model(db, fake_classifier, setup, status_
 async def test_exactly_the_cap_is_allowed(db, fake_classifier):
     await seed_groups(db, "Fruit")
     list_id = await make_list(db)
-    for index in range(MAX_GROUPING_ITEMS):
+    for index in range(MAX_GROUPING_ITEMS - 1):
         await add_item(db, list_id, f"item {index}", index)
     await add_item(db, list_id, "bought", MAX_GROUPING_ITEMS, purchased=True)
 
     result = await group_items(db, list_target(db, list_id))
 
-    assert len(result["items"]) == MAX_GROUPING_ITEMS + 1
+    assert len(result["items"]) == MAX_GROUPING_ITEMS
