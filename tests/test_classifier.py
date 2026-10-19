@@ -3,14 +3,8 @@ import json
 import pytest
 
 from app import bedrock, classifier
-from app.classifier import (
-    ClassifierError,
-    ClassifierUnavailable,
-    build_payload,
-    classify,
-    clean_name,
-    parse_assignments,
-)
+from app.bedrock import ModelError, ModelUnavailable
+from app.classifier import build_payload, classify, clean_name, parse_assignments
 
 GROUPS = ["Fruit", "Dairy"]
 
@@ -70,29 +64,24 @@ async def test_classify_sends_prompt_payload_and_limits(fake_bedrock):
 
 
 @pytest.mark.asyncio
-async def test_unusable_answer_raises_classifier_error(fake_bedrock):
+async def test_unusable_answer_raises_model_error(fake_bedrock):
     fake_bedrock.answer = "I cannot help with that."
 
-    with pytest.raises(ClassifierError):
+    with pytest.raises(ModelError) as caught:
         await classify(["milk"], GROUPS)
+
+    assert not isinstance(caught.value, ModelUnavailable)
 
 
 @pytest.mark.asyncio
-async def test_bedrock_failure_raises_classifier_error(fake_bedrock):
-    fake_bedrock.error = bedrock.BedrockError("Model call failed: ThrottlingException")
+@pytest.mark.parametrize("error", [ModelError("call failed"), ModelUnavailable("no credentials")])
+async def test_model_errors_reach_the_caller_unchanged(fake_bedrock, error):
+    fake_bedrock.error = error
 
-    with pytest.raises(ClassifierError) as caught:
+    with pytest.raises(type(error)) as caught:
         await classify(["milk"], GROUPS)
 
-    assert not isinstance(caught.value, ClassifierUnavailable)
-
-
-@pytest.mark.asyncio
-async def test_bedrock_unavailable_raises_classifier_unavailable(fake_bedrock):
-    fake_bedrock.error = bedrock.BedrockUnavailable("no credentials")
-
-    with pytest.raises(ClassifierUnavailable):
-        await classify(["milk"], GROUPS)
+    assert caught.value is error
 
 
 @pytest.mark.asyncio
@@ -168,7 +157,7 @@ def test_json_wrapped_in_fence_or_prose_is_parsed(wrapper):
     ],
 )
 def test_unusable_answer_raises(text):
-    with pytest.raises(ClassifierError):
+    with pytest.raises(ModelError):
         parse_assignments(text, 1, len(GROUPS))
 
 

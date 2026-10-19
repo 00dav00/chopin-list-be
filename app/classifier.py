@@ -1,7 +1,7 @@
 """Assigns shopping items to admin-managed groups with a language model.
 
 Builds the prompt and parses the answer; app/bedrock.py makes the call. Callers
-get one group index per item, or None for "Other", and never see provider details.
+get one group index per item, or None for "Other", or ModelError.
 """
 
 import json
@@ -9,6 +9,7 @@ import logging
 import unicodedata
 
 from . import bedrock
+from .bedrock import ModelError
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,6 @@ SYSTEM_PROMPT = (
     "only when no other group fits. Reply with JSON only, no prose, in exactly "
     'this shape: {"assignments": [{"i": <item number>, "g": <group number>}]}'
 )
-
-
-class ClassifierError(Exception):
-    """The model could not be reached or gave nothing usable."""
-
-
-class ClassifierUnavailable(ClassifierError):
-    """Bedrock credentials are not configured."""
 
 
 def clean_name(name: str) -> str:
@@ -72,7 +65,7 @@ def parse_assignments(text: str, item_count: int, group_count: int) -> list[int 
     parsed = _load_json_object(text)
     assignments = parsed.get("assignments") if parsed else None
     if not isinstance(assignments, list):
-        raise ClassifierError("Model answer has no assignments list.")
+        raise ModelError("Model answer has no assignments list.")
 
     result: list[int | None] = [None] * item_count
     seen: set[int] = set()
@@ -87,28 +80,23 @@ def parse_assignments(text: str, item_count: int, group_count: int) -> list[int 
             result[item] = group
 
     if not seen:
-        raise ClassifierError("Model answer has no valid assignment.")
+        raise ModelError("Model answer has no valid assignment.")
     return result
 
 
 async def classify(item_names: list[str], group_names: list[str]) -> list[int | None]:
-    """One group index per item (None for "Other"), or ClassifierError."""
+    """One group index per item (None for "Other"), or ModelError."""
     if not item_names:
         return []
-    try:
-        text = await bedrock.converse(
-            SYSTEM_PROMPT,
-            build_payload(item_names, group_names),
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0,
-        )
-    except bedrock.BedrockUnavailable as exc:
-        raise ClassifierUnavailable(str(exc)) from exc
-    except bedrock.BedrockError as exc:
-        raise ClassifierError(str(exc)) from exc
+    text = await bedrock.converse(
+        SYSTEM_PROMPT,
+        build_payload(item_names, group_names),
+        max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0,
+    )
 
     try:
         return parse_assignments(text, len(item_names), len(group_names))
-    except ClassifierError:
+    except ModelError:
         logger.warning("Model returned an unusable answer: %r", text[:2000])
         raise

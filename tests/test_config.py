@@ -55,3 +55,23 @@ def test_aws_credentials_absent_are_none(monkeypatch):
 
     assert loaded.aws_access_key_id is None
     assert loaded.aws_secret_access_key is None
+
+
+def test_bedrock_model_and_region_are_read_from_their_env_names(monkeypatch):
+    monkeypatch.setenv("BEDROCK_MODEL_ID", "model-sentinel")
+    monkeypatch.setenv("BEDROCK_REGION", "region-sentinel")
+
+    loaded = Settings()
+
+    assert loaded.bedrock_model_id == "model-sentinel"
+    assert loaded.bedrock_region == "region-sentinel"
+
+
+def test_bedrock_model_and_region_default_when_absent(monkeypatch):
+    monkeypatch.delenv("BEDROCK_MODEL_ID", raising=False)
+    monkeypatch.delenv("BEDROCK_REGION", raising=False)
+
+    loaded = Settings()
+
+    assert loaded.bedrock_model_id == "mistral.mistral-large-3-675b-instruct"
+    assert loaded.bedrock_region == "eu-west-2"
