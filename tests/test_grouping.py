@@ -97,7 +97,7 @@ async def test_groups_bought_and_unbought_items_in_one_group_order_with_other_la
     db, fake_classifier
 ):
     # Covers AE1, extended to bought items.
-    groups = await seed_groups(db, "Fruit", "Meat", "Dairy")
+    await seed_groups(db, "Fruit", "Meat", "Dairy")
     list_id = await make_list(db)
     await add_item(db, list_id, "milk", 0)
     await add_item(db, list_id, "apples", 1)
@@ -122,11 +122,11 @@ async def test_groups_bought_and_unbought_items_in_one_group_order_with_other_la
     assert run["unmatched"] == [{"item_id": card, "name": "birthday card"}]
     assert run["sent_at"] is None
     docs = await stored(db, list_id)
-    assert docs["milk"]["group_id"] == groups["Dairy"]
-    assert docs["apples"]["group_id"] == groups["Fruit"]
-    assert docs["birthday card"]["group_id"] is None
-    assert docs["cheese"]["group_id"] == groups["Dairy"]
-    assert docs["pears"]["group_id"] == groups["Fruit"]
+    assert docs["milk"]["group_name"] == "Dairy"
+    assert docs["apples"]["group_name"] == "Fruit"
+    assert docs["birthday card"]["group_name"] == "Other"
+    assert docs["cheese"]["group_name"] == "Dairy"
+    assert docs["pears"]["group_name"] == "Fruit"
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_bought_item_in_other_is_offered_to_admins(db, fake_classifier):
     result = await group_items(db, list_target(db, list_id))
 
     assert result["unmatched"] == [{"item_id": card, "name": "birthday card"}]
-    assert (await stored(db, list_id))["birthday card"]["group_id"] is None
+    assert (await stored(db, list_id))["birthday card"]["group_name"] == "Other"
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_item_added_during_wait_goes_to_the_end(db, fake_classifier):
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
     assert names(result) == ["apples", "milk", "bread", "eggs"]
-    assert "group_id" not in (await stored(db, list_id))["eggs"]
+    assert "group_name" not in (await stored(db, list_id))["eggs"]
 
 
 @pytest.mark.asyncio
@@ -340,7 +340,7 @@ async def test_item_renamed_during_wait_is_placed_by_its_old_name(db, fake_class
 
 @pytest.mark.asyncio
 async def test_item_unticked_during_wait_keeps_its_group_place(db, fake_classifier):
-    groups = await seed_groups(db, "Bakery", "Fruit")
+    await seed_groups(db, "Bakery", "Fruit")
     list_id = await make_list(db)
     await add_item(db, list_id, "apples", 0)
     bread = await add_item(db, list_id, "bread", 1, purchased=True)
@@ -352,7 +352,7 @@ async def test_item_unticked_during_wait_keeps_its_group_place(db, fake_classifi
     result = await run_with_edits(db, list_target(db, list_id), fake_classifier, edits)
 
     assert names(result) == ["bread", "apples"]
-    assert (await stored(db, list_id))["bread"]["group_id"] == groups["Bakery"]
+    assert (await stored(db, list_id))["bread"]["group_name"] == "Bakery"
 
 
 @pytest.mark.asyncio
@@ -410,7 +410,7 @@ async def test_target_completed_or_deleted_during_wait_writes_nothing(
     assert raised.value.status_code == status_code
     docs = await stored(db, list_id)
     assert [docs["apples"]["sort_order"], docs["card"]["sort_order"]] == [7, 3]
-    assert all("group_id" not in doc for doc in docs.values())
+    assert all("group_name" not in doc for doc in docs.values())
     assert touches == []
     assert await db.grouping_runs.count_documents({}) == 0
 
@@ -435,7 +435,7 @@ async def test_classifier_failure_returns_503_and_changes_nothing(db, fake_class
     assert raised.value.status_code == 503
     doc = (await stored(db, list_id))["apples"]
     assert doc["sort_order"] == 5
-    assert "group_id" not in doc
+    assert "group_name" not in doc
     assert touches == []
     assert await db.grouping_runs.count_documents({}) == 0
 

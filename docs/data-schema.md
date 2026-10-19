@@ -86,7 +86,7 @@ Fields:
 - `purchased`: `bool` (default `false`)
 - `purchased_at`: `datetime | null` (set when purchased)
 - `sort_order`: `int` (default `0`)
-- `group_id`: `string | null` (absent until grouped; `null` means "Other"; never returned by the API)
+- `group_name`: `string` (absent until grouped; the group's name at grouping time, `"Other"` included; not updated when a group is renamed or deleted; never returned by the API)
 - `created_at`: `datetime`
 - `updated_at`: `datetime`
 
@@ -123,7 +123,7 @@ Fields:
 - `name`: `string` (required)
 - `qty`: `number | null`
 - `sort_order`: `int` (default `0`)
-- `group_id`: `string | null` (as on `items`; copied when a list is created from the template)
+- `group_name`: `string` (as on `items`; copied when a list is created from the template)
 - `created_at`: `datetime`
 - `updated_at`: `datetime`
 

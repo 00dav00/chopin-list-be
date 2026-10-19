@@ -322,7 +322,7 @@ async def test_group_template_orders_all_items_and_leaves_version(client, db, fa
     body = response.json()
     assert [item["name"] for item in body["items"]] == ["apples", "milk", "card"]
     assert [entry["name"] for entry in body["unmatched"]] == ["card"]
-    assert all("group_id" not in item for item in body["items"])
+    assert all("group_name" not in item for item in body["items"])
     after = await db.templates.find_one({"_id": ObjectId(template["id"])})
     assert after["updated_at"] == before["updated_at"]
     run = await db.grouping_runs.find_one({"_id": ObjectId(body["run_id"])})
@@ -347,32 +347,32 @@ async def test_group_unknown_template_returns_404(client, fake_classifier):
 
 
 @pytest.mark.asyncio
-async def test_create_list_from_template_copies_group_id(client, db):
+async def test_create_list_from_template_copies_group_name(client, db):
     template = await create_template(client, items=[{"name": "milk", "sort_order": 0}])
     await db.template_items.update_many(
-        {"template_id": template["id"]}, {"$set": {"group_id": "group-dairy"}}
+        {"template_id": template["id"]}, {"$set": {"group_name": "Dairy"}}
     )
 
     response = await client.post(f"/templates/{template['id']}/create-list", json={})
 
     items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
-    assert [item["group_id"] for item in items] == ["group-dairy"]
+    assert [item["group_name"] for item in items] == ["Dairy"]
 
 
 @pytest.mark.asyncio
-async def test_create_list_from_template_leaves_never_grouped_items_without_group_id(
+async def test_create_list_from_template_leaves_never_grouped_items_without_group_name(
     client, db
 ):
     template = await create_template(
         client, items=[{"name": "card", "sort_order": 0}, {"name": "milk", "sort_order": 1}]
     )
     await db.template_items.update_one(
-        {"template_id": template["id"], "name": "card"}, {"$set": {"group_id": None}}
+        {"template_id": template["id"], "name": "card"}, {"$set": {"group_name": "Other"}}
     )
 
     response = await client.post(f"/templates/{template['id']}/create-list", json={})
 
     items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
     by_name = {item["name"]: item for item in items}
-    assert by_name["card"]["group_id"] is None
-    assert "group_id" not in by_name["milk"]
+    assert by_name["card"]["group_name"] == "Other"
+    assert "group_name" not in by_name["milk"]

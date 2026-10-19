@@ -524,7 +524,7 @@ async def test_group_list_orders_items_and_reports_unmatched(client, db, fake_cl
     assert [entry["name"] for entry in body["unmatched"]] == ["birthday card"]
     assert body["run_id"]
     # The saved group stays hidden from shoppers (R5).
-    assert all("group_id" not in item for item in body["items"])
+    assert all("group_name" not in item for item in body["items"])
 
 
 @pytest.mark.asyncio

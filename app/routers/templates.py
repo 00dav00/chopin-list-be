@@ -390,9 +390,9 @@ async def create_list_from_template(
                 "created_at": now,
                 "updated_at": now,
             }
-            # Absent means never grouped; null means grouped into "Other".
-            if "group_id" in item:
-                item_doc["group_id"] = item["group_id"]
+            # Absent means never grouped; "Other" is stored like any group name.
+            if "group_name" in item:
+                item_doc["group_name"] = item["group_name"]
             item_docs.append(item_doc)
         # Templates bulk-insert exception to the mark_list_touched invariant.
         # We deliberately do NOT call mark_list_touched here. Rationale:
