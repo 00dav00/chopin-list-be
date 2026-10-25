@@ -5,7 +5,7 @@ from bson import ObjectId
 from fastapi import HTTPException
 import pytest
 
-from app.bedrock import ModelError
+from app.model_errors import ModelError
 from app.grouping import MAX_GROUPING_ITEMS, GroupingTarget, group_items
 from app.schemas import group_name_key
 

@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from app import bedrock, classifier
-from app.bedrock import ModelError, ModelUnavailable
+from app import classifier, llm
 from app.classifier import build_payload, classify, clean_name, parse_assignments
+from app.model_errors import ModelError, ModelUnavailable
 
 GROUPS = ["Fruit", "Dairy"]
 
@@ -13,8 +13,8 @@ def _answer(*pairs) -> str:
     return json.dumps({"assignments": [{"i": i, "g": g} for i, g in pairs]})
 
 
-class FakeBedrock:
-    """Stands in for bedrock.converse: records calls, answers with `answer`."""
+class FakeModel:
+    """Stands in for llm.converse: records calls, answers with `answer`."""
 
     def __init__(self):
         self.calls: list[dict] = []
@@ -31,9 +31,9 @@ class FakeBedrock:
 
 
 @pytest.fixture
-def fake_bedrock(monkeypatch):
-    fake = FakeBedrock()
-    monkeypatch.setattr(bedrock, "converse", fake.converse)
+def fake_model(monkeypatch):
+    fake = FakeModel()
+    monkeypatch.setattr(llm, "converse", fake.converse)
     return fake
 
 
@@ -41,8 +41,8 @@ def fake_bedrock(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_classify_maps_each_item_to_its_group(fake_bedrock):
-    fake_bedrock.answer = _answer((0, 1), (1, 0), (2, 2))
+async def test_classify_maps_each_item_to_its_group(fake_model):
+    fake_model.answer = _answer((0, 1), (1, 0), (2, 2))
 
     result = await classify(["milk", "apples", "birthday card"], GROUPS)
 
@@ -50,10 +50,10 @@ async def test_classify_maps_each_item_to_its_group(fake_bedrock):
 
 
 @pytest.mark.asyncio
-async def test_classify_sends_prompt_payload_and_limits(fake_bedrock):
+async def test_classify_sends_prompt_payload_and_limits(fake_model):
     await classify(["apples"], GROUPS)
 
-    assert fake_bedrock.calls == [
+    assert fake_model.calls == [
         {
             "system": classifier.SYSTEM_PROMPT,
             "text": build_payload(["apples"], GROUPS),
@@ -64,8 +64,8 @@ async def test_classify_sends_prompt_payload_and_limits(fake_bedrock):
 
 
 @pytest.mark.asyncio
-async def test_unusable_answer_raises_model_error(fake_bedrock):
-    fake_bedrock.answer = "I cannot help with that."
+async def test_unusable_answer_raises_model_error(fake_model):
+    fake_model.answer = "I cannot help with that."
 
     with pytest.raises(ModelError) as caught:
         await classify(["milk"], GROUPS)
@@ -75,8 +75,8 @@ async def test_unusable_answer_raises_model_error(fake_bedrock):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [ModelError("call failed"), ModelUnavailable("no credentials")])
-async def test_model_errors_reach_the_caller_unchanged(fake_bedrock, error):
-    fake_bedrock.error = error
+async def test_model_errors_reach_the_caller_unchanged(fake_model, error):
+    fake_model.error = error
 
     with pytest.raises(type(error)) as caught:
         await classify(["milk"], GROUPS)
@@ -85,9 +85,9 @@ async def test_model_errors_reach_the_caller_unchanged(fake_bedrock, error):
 
 
 @pytest.mark.asyncio
-async def test_no_items_skips_the_model(fake_bedrock):
+async def test_no_items_skips_the_model(fake_model):
     assert await classify([], GROUPS) == {}
-    assert fake_bedrock.calls == []
+    assert fake_model.calls == []
 
 
 # --- build_payload ---------------------------------------------------------

@@ -18,10 +18,11 @@ services:
       # A key in .env would select the Brevo API and mail real admins from a
       # laptop. Blank means absent; opt in with docker-compose.brevo.yml.
       BREVO_API_KEY: ""
-      # Same reasoning for Bedrock: a laptop never calls the real model unless
-      # these are set deliberately for a smoke test.
+      # Same reasoning for the model providers: a laptop never calls a real
+      # model unless these are set deliberately for a smoke test.
       AWS_ACCESS_KEY_ID: ""
       AWS_SECRET_ACCESS_KEY: ""
+      SCALEWAY_API_KEY: ""
 
   # Local fake inbox: captures mail instead of delivering it, and serves a web
   # UI on http://localhost:8025. Speaks plaintext SMTP only, hence SMTP_TLS=none.

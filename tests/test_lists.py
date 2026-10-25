@@ -603,7 +603,7 @@ async def test_group_list_without_groups_returns_409(client, db, fake_classifier
 
 @pytest.mark.asyncio
 async def test_group_list_when_model_unavailable_returns_503(client, db, fake_classifier):
-    from app.bedrock import ModelUnavailable
+    from app.model_errors import ModelUnavailable
 
     await _seed_groups(db, "Fruit")
     created = await create_list(client)

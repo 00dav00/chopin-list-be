@@ -31,6 +31,9 @@ for _aws_var in (
     "AWS_PROFILE",
 ):
     os.environ.pop(_aws_var, None)
+# And for Scaleway, plus the provider choice, so each test picks its own.
+for _model_var in ("SCALEWAY_API_KEY", "SCALEWAY_MODEL", "MODEL_PROVIDER"):
+    os.environ.pop(_model_var, None)
 
 from app.auth import get_current_user  # noqa: E402
 from app.db import get_db  # noqa: E402
