@@ -46,7 +46,7 @@ async def test_classify_maps_each_item_to_its_group(fake_bedrock):
 
     result = await classify(["milk", "apples", "birthday card"], GROUPS)
 
-    assert result == [1, 0, None]
+    assert result == {"milk": "Dairy", "apples": "Fruit", "birthday card": "Other"}
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_model_errors_reach_the_caller_unchanged(fake_bedrock, error):
 
 @pytest.mark.asyncio
 async def test_no_items_skips_the_model(fake_bedrock):
-    assert await classify([], GROUPS) == []
+    assert await classify([], GROUPS) == {}
     assert fake_bedrock.calls == []
 
 
@@ -114,22 +114,53 @@ def test_build_payload_cleans_item_names():
 
 
 def test_missing_item_goes_to_other():
-    assert parse_assignments(_answer((0, 0)), 2, len(GROUPS)) == [0, None]
+    result = parse_assignments(_answer((0, 0)), ["apples", "tahini"], GROUPS)
+
+    assert result == {"apples": "Fruit", "tahini": "Other"}
+
+
+def test_other_group_number_goes_to_other():
+    result = parse_assignments(_answer((0, 2)), ["card"], GROUPS)
+
+    assert result == {"card": "Other"}
+
+
+def test_keys_are_the_names_as_passed_not_the_cleaned_ones():
+    result = parse_assignments(_answer((0, 1)), ["  oat\tmilk "], GROUPS)
+
+    assert result == {"  oat\tmilk ": "Dairy"}
+
+
+def test_items_with_the_same_name_share_the_first_real_group():
+    text = _answer((0, 2), (1, 1), (2, 0))
+
+    result = parse_assignments(text, ["milk", "milk", "milk"], GROUPS)
+
+    assert result == {"milk": "Dairy"}
+
+
+def test_items_with_the_same_name_all_in_other_stay_other():
+    result = parse_assignments(_answer((0, 0), (1, 2), (2, 2)), ["apples", "card", "card"], GROUPS)
+
+    assert result == {"apples": "Fruit", "card": "Other"}
 
 
 @pytest.mark.parametrize("group", [5, -1, "0", None, True])
 def test_invalid_group_number_goes_to_other(group):
     text = json.dumps({"assignments": [{"i": 0, "g": 0}, {"i": 1, "g": group}]})
 
-    assert parse_assignments(text, 2, len(GROUPS)) == [0, None]
+    assert parse_assignments(text, ["apples", "milk"], GROUPS) == {
+        "apples": "Fruit",
+        "milk": "Other",
+    }
 
 
 def test_duplicate_assignment_keeps_the_first():
-    assert parse_assignments(_answer((0, 1), (0, 0)), 1, len(GROUPS)) == [1]
+    assert parse_assignments(_answer((0, 1), (0, 0)), ["milk"], GROUPS) == {"milk": "Dairy"}
 
 
 def test_out_of_range_item_numbers_are_ignored():
-    assert parse_assignments(_answer((7, 0), (0, 1)), 1, len(GROUPS)) == [1]
+    assert parse_assignments(_answer((7, 0), (0, 1)), ["milk"], GROUPS) == {"milk": "Dairy"}
 
 
 @pytest.mark.parametrize(
@@ -142,7 +173,7 @@ def test_out_of_range_item_numbers_are_ignored():
 def test_json_wrapped_in_fence_or_prose_is_parsed(wrapper):
     text = wrapper.replace("{}", _answer((0, 1)))
 
-    assert parse_assignments(text, 1, len(GROUPS)) == [1]
+    assert parse_assignments(text, ["milk"], GROUPS) == {"milk": "Dairy"}
 
 
 @pytest.mark.parametrize(
@@ -158,7 +189,7 @@ def test_json_wrapped_in_fence_or_prose_is_parsed(wrapper):
 )
 def test_unusable_answer_raises(text):
     with pytest.raises(ModelError):
-        parse_assignments(text, 1, len(GROUPS))
+        parse_assignments(text, ["milk"], GROUPS)
 
 
 # --- clean_name ------------------------------------------------------------

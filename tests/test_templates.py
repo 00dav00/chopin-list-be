@@ -288,3 +288,91 @@ async def test_create_list_from_template_skips_mark_list_touched(client):
         headers={"If-None-Match": etag},
     )
     assert cond.status_code == 304
+
+
+# ---------------------------------------------------------------------------
+# Group by kind: POST /templates/{template_id}/group (service logic in test_grouping.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_group_template_orders_all_items_and_leaves_version(client, db, fake_classifier):
+    from app.schemas import group_name_key
+
+    await db.groups.insert_many(
+        [
+            {"name": "Fruit", "name_key": group_name_key("Fruit"), "position": 0},
+            {"name": "Dairy", "name_key": group_name_key("Dairy"), "position": 1},
+        ]
+    )
+    template = await create_template(
+        client,
+        items=[
+            {"name": "milk", "sort_order": 0},
+            {"name": "card", "sort_order": 1},
+            {"name": "apples", "sort_order": 2},
+        ],
+    )
+    before = await db.templates.find_one({"_id": ObjectId(template["id"])})
+    fake_classifier.assignments = {"milk": "Dairy", "apples": "Fruit"}
+
+    response = await client.post(f"/templates/{template['id']}/group")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["name"] for item in body["items"]] == ["apples", "milk", "card"]
+    assert [entry["name"] for entry in body["unmatched"]] == ["card"]
+    assert all("group_name" not in item for item in body["items"])
+    after = await db.templates.find_one({"_id": ObjectId(template["id"])})
+    assert after["updated_at"] == before["updated_at"]
+    run = await db.grouping_runs.find_one({"_id": ObjectId(body["run_id"])})
+    assert run["target_kind"] == "template"
+
+
+@pytest.mark.asyncio
+async def test_group_empty_template_returns_422(client, db, fake_classifier):
+    template = await create_template(client)
+
+    response = await client.post(f"/templates/{template['id']}/group")
+
+    assert response.status_code == 422
+    assert fake_classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_group_unknown_template_returns_404(client, fake_classifier):
+    response = await client.post(f"/templates/{ObjectId()}/group")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_list_from_template_copies_group_name(client, db):
+    template = await create_template(client, items=[{"name": "milk", "sort_order": 0}])
+    await db.template_items.update_many(
+        {"template_id": template["id"]}, {"$set": {"group_name": "Dairy"}}
+    )
+
+    response = await client.post(f"/templates/{template['id']}/create-list", json={})
+
+    items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
+    assert [item["group_name"] for item in items] == ["Dairy"]
+
+
+@pytest.mark.asyncio
+async def test_create_list_from_template_leaves_never_grouped_items_without_group_name(
+    client, db
+):
+    template = await create_template(
+        client, items=[{"name": "card", "sort_order": 0}, {"name": "milk", "sort_order": 1}]
+    )
+    await db.template_items.update_one(
+        {"template_id": template["id"], "name": "card"}, {"$set": {"group_name": "Other"}}
+    )
+
+    response = await client.post(f"/templates/{template['id']}/create-list", json={})
+
+    items = await db.items.find({"list_id": response.json()["id"]}).to_list(length=None)
+    by_name = {item["name"]: item for item in items}
+    assert by_name["card"]["group_name"] == "Other"
+    assert "group_name" not in by_name["milk"]

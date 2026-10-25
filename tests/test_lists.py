@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -482,3 +483,133 @@ def test_list_etag_returns_none_when_updated_at_is_none():
     until then this tests the helper directly so the defense survives
     refactors of the endpoint."""
     assert _list_etag(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Group by kind: POST /lists/{list_id}/group (service logic in test_grouping.py)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_groups(db, *names):
+    from app.schemas import group_name_key
+
+    await db.groups.insert_many(
+        [
+            {"name": name, "name_key": group_name_key(name), "position": position}
+            for position, name in enumerate(names)
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_list_orders_items_and_reports_unmatched(client, db, fake_classifier):
+    # Covers AE1 end to end.
+    await _seed_groups(db, "Fruit", "Meat", "Dairy", "Bakery")
+    created = await create_list(client)
+    for position, name in enumerate(["milk", "apples", "birthday card", "chicken"]):
+        await create_item(client, created["id"], name=name, sort_order=position)
+    bread = await create_item(client, created["id"], name="bread", sort_order=4)
+    await client.post(f"/items/{bread['id']}/toggle")
+    fake_classifier.assignments = {
+        "milk": "Dairy", "apples": "Fruit", "chicken": "Meat", "bread": "Bakery",
+    }
+
+    response = await client.post(f"/lists/{created['id']}/group")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["name"] for item in body["items"]] == [
+        "apples", "chicken", "milk", "bread", "birthday card",
+    ]
+    assert [entry["name"] for entry in body["unmatched"]] == ["birthday card"]
+    assert body["run_id"]
+    # The saved group stays hidden from shoppers (R5).
+    assert all("group_name" not in item for item in body["items"])
+
+
+@pytest.mark.asyncio
+async def test_group_list_changes_the_etag(client, db, fake_classifier):
+    await _seed_groups(db, "Dairy")
+    created = await create_list(client)
+    await create_item(client, created["id"], name="milk")
+    etag = (await client.get(f"/lists/{created['id']}")).headers["etag"]
+
+    await client.post(f"/lists/{created['id']}/group")
+    after = await client.get(f"/lists/{created['id']}", headers={"If-None-Match": etag})
+
+    assert after.status_code == 200
+    assert after.headers["etag"] != etag
+
+
+@pytest.mark.asyncio
+async def test_group_list_keeps_edits_from_another_device(client, db, fake_classifier):
+    # Covers AE9 through the real endpoints.
+    await _seed_groups(db, "Fruit", "Dairy")
+    created = await create_list(client)
+    milk = await create_item(client, created["id"], name="milk", sort_order=0)
+    await create_item(client, created["id"], name="apples", sort_order=1)
+    fake_classifier.assignments = {"milk": "Dairy", "apples": "Fruit"}
+    fake_classifier.gate = asyncio.Event()
+
+    grouping = asyncio.create_task(client.post(f"/lists/{created['id']}/group"))
+    await asyncio.wait_for(fake_classifier.entered.wait(), 2)
+    await create_item(client, created["id"], name="eggs", sort_order=2)
+    await client.post(f"/items/{milk['id']}/toggle")
+    fake_classifier.gate.set()
+    response = await grouping
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["name"] for item in items] == ["apples", "milk", "eggs"]
+    assert [item["purchased"] for item in items] == [False, True, False]
+
+
+@pytest.mark.asyncio
+async def test_group_completed_list_returns_409_without_calling_model(
+    client, db, fake_classifier
+):
+    await _seed_groups(db, "Fruit")
+    created = await create_list(client)
+    await create_item(client, created["id"], name="apples")
+    await client.post(f"/lists/{created['id']}/complete")
+
+    response = await client.post(f"/lists/{created['id']}/group")
+
+    assert response.status_code == 409
+    assert fake_classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_group_other_users_list_returns_404(client, db, fake_classifier):
+    await _seed_groups(db, "Fruit")
+    result = await db.lists.insert_one({"user_id": "someone-else", "name": "Theirs"})
+
+    response = await client.post(f"/lists/{result.inserted_id}/group")
+
+    assert response.status_code == 404
+    assert fake_classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_group_list_without_groups_returns_409(client, db, fake_classifier):
+    created = await create_list(client)
+    await create_item(client, created["id"], name="apples")
+
+    response = await client.post(f"/lists/{created['id']}/group")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Grouping is not set up yet: no groups are configured."
+
+
+@pytest.mark.asyncio
+async def test_group_list_when_model_unavailable_returns_503(client, db, fake_classifier):
+    from app.bedrock import ModelUnavailable
+
+    await _seed_groups(db, "Fruit")
+    created = await create_list(client)
+    await create_item(client, created["id"], name="apples")
+    fake_classifier.error = ModelUnavailable("no credentials")
+
+    response = await client.post(f"/lists/{created['id']}/group")
+
+    assert response.status_code == 503

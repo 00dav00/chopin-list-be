@@ -10,10 +10,12 @@ from ..schemas import (
     ItemCreate,
     ItemOut,
     ListCreate,
+    ListGroupingOut,
     ListOut,
     ListUpdate,
     ReorderItems,
 )
+from ..grouping import GroupingTarget, group_items
 from ..utils import mark_list_touched, serialize_doc, to_object_id, utcnow
 
 CACHE_CONTROL_PRIVATE_NO_CACHE = "private, no-cache"
@@ -328,3 +330,31 @@ async def reorder_items(
     )
     docs = await cursor.to_list(length=None)
     return [serialize_doc(doc) for doc in docs]
+
+
+@router.post("/{list_id}/group", response_model=ListGroupingOut)
+async def group_list_items(
+    list_id: str,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    user_id = current_user["id"]
+
+    async def ensure_editable():
+        _ensure_list_is_active(await _get_list_or_404(db, list_id, user_id))
+
+    async def touch(now):
+        await mark_list_touched(db, list_id, user_id, now)
+
+    return await group_items(
+        db,
+        GroupingTarget(
+            kind="list",
+            target_id=list_id,
+            user_id=user_id,
+            items_collection="items",
+            parent_field="list_id",
+            ensure_editable=ensure_editable,
+            touch=touch,
+        ),
+    )
