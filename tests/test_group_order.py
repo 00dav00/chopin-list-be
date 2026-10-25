@@ -3,7 +3,7 @@ import pytest
 from app.group_order import GroupOrder
 
 GROUPS = [{"id": "fruit-id", "name": "Fruit"}, {"id": "dairy-id", "name": "Dairy"}]
-FRUIT, DAIRY, OTHER = 0, 1, None
+FRUIT, DAIRY, OTHER = "Fruit", "Dairy", "Other"
 
 
 def item(item_id, name=None, purchased=False):
@@ -15,9 +15,9 @@ def ids(items):
 
 
 def order_for(*pairs):
-    """GroupOrder built from (item, group index) pairs, as the model answered them."""
+    """GroupOrder built from (item, group name) pairs, as the classifier returns them."""
     items = [entry for entry, _ in pairs]
-    return GroupOrder(items, GROUPS, [group for _, group in pairs])
+    return GroupOrder(items, GROUPS, {entry["name"]: group for entry, group in pairs})
 
 
 # --- sort ------------------------------------------------------------------
@@ -67,7 +67,7 @@ def test_items_deleted_during_the_wait_are_not_brought_back():
 
 
 def test_ids_are_matched_as_strings():
-    order = GroupOrder([{"_id": 7, "name": "milk"}], GROUPS, [DAIRY])
+    order = GroupOrder([{"_id": 7, "name": "milk"}], GROUPS, {"milk": DAIRY})
 
     assert order.is_classified("7")
     assert order.group_name("7") == "Dairy"
@@ -81,6 +81,16 @@ def test_group_name_is_the_group_name_or_other():
 
     assert order.group_name("milk") == "Dairy"
     assert order.group_name("card") == "Other"
+
+
+def test_item_missing_from_the_answer_or_with_an_unknown_group_goes_to_other():
+    items = [item("milk"), item("tahini"), item("card")]
+
+    order = GroupOrder(items, GROUPS, {"milk": DAIRY, "card": "Cards & gifts"})
+
+    assert order.group_name("tahini") == "Other"
+    assert order.group_name("card") == "Other"
+    assert ids(order.sort(items)) == ["milk", "tahini", "card"]
 
 
 def test_only_items_the_model_saw_are_classified():

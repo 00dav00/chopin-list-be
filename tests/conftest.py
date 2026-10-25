@@ -139,12 +139,10 @@ class FakeClassifier:
             await self.gate.wait()
         if self.error is not None:
             raise self.error
-        return [
-            group_names.index(self.assignments[name])
-            if self.assignments.get(name) in group_names
-            else None
+        return {
+            name: self.assignments[name] if self.assignments.get(name) in group_names else "Other"
             for name in item_names
-        ]
+        }
 
 
 @pytest.fixture

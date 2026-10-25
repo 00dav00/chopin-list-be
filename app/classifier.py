@@ -1,7 +1,7 @@
 """Assigns shopping items to admin-managed groups with a language model.
 
 Builds the prompt and parses the answer; app/bedrock.py makes the call. Callers
-get one group index per item, or None for "Other", or ModelError.
+get each item name mapped to its group name ("Other" included), or ModelError.
 """
 
 import json
@@ -10,6 +10,7 @@ import unicodedata
 
 from . import bedrock
 from .bedrock import ModelError
+from .routers.groups import OTHER_GROUP_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def clean_name(name: str) -> str:
 def build_payload(item_names: list[str], group_names: list[str]) -> str:
     """The user message: numbered groups with "Other" last, and numbered items."""
     groups = [{"g": index, "name": name} for index, name in enumerate(group_names)]
-    groups.append({"g": len(group_names), "name": "Other"})
+    groups.append({"g": len(group_names), "name": OTHER_GROUP_NAME})
     items = [{"i": index, "name": clean_name(name)} for index, name in enumerate(item_names)]
     return json.dumps({"groups": groups, "items": items}, ensure_ascii=False)
 
@@ -60,8 +61,12 @@ def _is_index(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def parse_assignments(text: str, item_count: int, group_count: int) -> list[int | None]:
-    """Maps the model's answer to one group index per item; None means "Other"."""
+def parse_assignments(
+    text: str, item_names: list[str], group_names: list[str]
+) -> dict[str, str]:
+    """Maps every item name to its group name; missing or invalid answers mean "Other".
+    Items sharing a name share one entry: the first real group wins, then "Other"."""
+    item_count, group_count = len(item_names), len(group_names)
     parsed = _load_json_object(text)
     assignments = parsed.get("assignments") if parsed else None
     if not isinstance(assignments, list):
@@ -81,13 +86,20 @@ def parse_assignments(text: str, item_count: int, group_count: int) -> list[int 
 
     if not seen:
         raise ModelError("Model answer has no valid assignment.")
-    return result
+
+    by_name: dict[str, str] = {}
+    for name, group in zip(item_names, result):
+        if group is not None and by_name.get(name, OTHER_GROUP_NAME) == OTHER_GROUP_NAME:
+            by_name[name] = group_names[group]
+        else:
+            by_name.setdefault(name, OTHER_GROUP_NAME)
+    return by_name
 
 
-async def classify(item_names: list[str], group_names: list[str]) -> list[int | None]:
-    """One group index per item (None for "Other"), or ModelError."""
+async def classify(item_names: list[str], group_names: list[str]) -> dict[str, str]:
+    """Each item name mapped to its group name ("Other" included), or ModelError."""
     if not item_names:
-        return []
+        return {}
     text = await bedrock.converse(
         SYSTEM_PROMPT,
         build_payload(item_names, group_names),
@@ -96,7 +108,7 @@ async def classify(item_names: list[str], group_names: list[str]) -> list[int | 
     )
 
     try:
-        return parse_assignments(text, len(item_names), len(group_names))
+        return parse_assignments(text, item_names, group_names)
     except ModelError:
         logger.warning("Model returned an unusable answer: %r", text[:2000])
         raise

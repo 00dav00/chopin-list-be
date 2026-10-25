@@ -7,16 +7,18 @@ class GroupOrder:
     """The model's answer, keyed by item id so it applies to the items as they
     are after the wait: items added meanwhile go last, deleted ones drop out."""
 
-    def __init__(
-        self, items: list[dict], groups: list[dict], assignments: list[int | None]
-    ):
-        self._group_names = [group["name"] for group in groups]
+    def __init__(self, items: list[dict], groups: list[dict], assignments: dict[str, str]):
         self._other_rank = len(groups)
+        rank_by_group = {group["name"]: rank for rank, group in enumerate(groups)}
         self._ranks: dict[str, int] = {}
+        self._group_names: dict[str, str] = {}
         self._judged_names: dict[str, str] = {}
-        for item, group_index in zip(items, assignments):
+        for item in items:
             item_id = str(item["_id"])
-            self._ranks[item_id] = self._other_rank if group_index is None else group_index
+            group = assignments.get(item["name"], OTHER_GROUP_NAME)
+            rank = rank_by_group.get(group, self._other_rank)
+            self._ranks[item_id] = rank
+            self._group_names[item_id] = group if rank != self._other_rank else OTHER_GROUP_NAME
             self._judged_names[item_id] = item["name"]
 
     def sort(self, items: list[dict]) -> list[dict]:
@@ -30,8 +32,7 @@ class GroupOrder:
 
     def group_name(self, item_id: str) -> str:
         """The item's group name, "Other" included. Only for classified items."""
-        rank = self._ranks[item_id]
-        return OTHER_GROUP_NAME if rank == self._other_rank else self._group_names[rank]
+        return self._group_names[item_id]
 
     def unmatched(self, items: list[dict]) -> list[dict]:
         """Items placed in "Other", under the name the model judged, so a rename
