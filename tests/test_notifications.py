@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -664,3 +665,76 @@ async def test_client_is_hardened(api_configured, brevo_api, monkeypatch, admins
     assert kwargs["follow_redirects"] is False
     assert kwargs["trust_env"] is False
     assert kwargs["timeout"] == notifications.BREVO_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Unmatched-items admin notification. The trigger (POST /grouping-runs/{id}/send)
+# is tested in tests/test_unmatched.py.
+# ---------------------------------------------------------------------------
+
+UNMATCHED_NAMES = ["birthday card", "tahini"]
+
+
+@pytest.mark.asyncio
+async def test_unmatched_email_lists_names_one_per_line_with_admin_link(
+    configured, sent, admins
+):
+    await notifications.send_unmatched_items_notification(admins, UNMATCHED_NAMES)
+
+    assert len(sent) == 1
+    message, _ = sent[0]
+    assert message["To"] == "admin@example.com, other@example.com"
+    assert message["Subject"] == "Chopin List items that fit no group"
+    body = message.get_content()
+    assert "- birthday card\n- tahini\n" in body
+    assert "http://chopin-test-fe.invalid/#/admin/unmatched-items" in body
+
+
+@pytest.mark.asyncio
+async def test_unmatched_email_subject_never_carries_item_text(
+    api_configured, brevo_api, admins
+):
+    await notifications.send_unmatched_items_notification(admins, ["Sale! click here"])
+
+    payload = brevo_api.payload()
+    assert payload["subject"] == "Chopin List items that fit no group"
+    assert "Sale! click here" in payload["textContent"]
+    assert set(payload) == {"sender", "to", "subject", "textContent"}
+
+
+@pytest.mark.asyncio
+async def test_unmatched_email_failure_is_swallowed(api_configured, brevo_api, admins, caplog):
+    brevo_api.respond = lambda request: httpx.Response(500, json={"code": "boom"})
+
+    with caplog.at_level(logging.ERROR, logger="app.notifications"):
+        await notifications.send_unmatched_items_notification(admins, UNMATCHED_NAMES)
+
+    assert "Admin notification failed to send" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unmatched_email_dry_run_prints_instead_of_sending(
+    configured, sent, admins, monkeypatch, capsys
+):
+    monkeypatch.setattr(notifications.settings, "mail_dry_run", True)
+
+    await notifications.send_unmatched_items_notification(admins, UNMATCHED_NAMES)
+
+    assert sent == []
+    assert "- tahini" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unmatched_items_sends_in_the_background(configured, sent, admins):
+    notifications.dispatch_unmatched_items_notification(admins, UNMATCHED_NAMES)
+    await asyncio.gather(*notifications._pending_sends)
+
+    assert len(sent) == 1
+    assert sent[0][0]["Subject"] == "Chopin List items that fit no group"
+
+
+def test_dispatch_without_an_event_loop_does_not_raise(caplog):
+    with caplog.at_level(logging.ERROR, logger="app.notifications"):
+        notifications.dispatch_unmatched_items_notification(None, UNMATCHED_NAMES)
+
+    assert "could not be scheduled" in caplog.text
