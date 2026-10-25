@@ -75,3 +75,36 @@ def test_bedrock_model_and_region_default_when_absent(monkeypatch):
 
     assert loaded.bedrock_model_id == "mistral.mistral-large-3-675b-instruct"
     assert loaded.bedrock_region == "eu-west-2"
+
+
+def test_model_provider_is_read_from_its_env_name(monkeypatch):
+    monkeypatch.setenv("MODEL_PROVIDER", "provider-sentinel")
+
+    assert Settings().model_provider == "provider-sentinel"
+
+
+def test_model_provider_absent_is_none(monkeypatch):
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+
+    assert Settings().model_provider is None
+
+
+def test_scaleway_settings_are_read_from_their_env_names(monkeypatch):
+    monkeypatch.setenv("SCALEWAY_API_KEY", "scaleway-key-sentinel")
+    monkeypatch.setenv("SCALEWAY_MODEL", "model-sentinel")
+
+    loaded = Settings()
+
+    assert loaded.scaleway_api_key.get_secret_value() == "scaleway-key-sentinel"
+    assert loaded.scaleway_model == "model-sentinel"
+    assert "scaleway-key-sentinel" not in repr(loaded)
+
+
+def test_scaleway_settings_absent_are_none(monkeypatch):
+    monkeypatch.delenv("SCALEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("SCALEWAY_MODEL", raising=False)
+
+    loaded = Settings()
+
+    assert loaded.scaleway_api_key is None
+    assert loaded.scaleway_model is None

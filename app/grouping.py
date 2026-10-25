@@ -13,7 +13,7 @@ from fastapi import HTTPException, status
 from pymongo import UpdateOne
 
 from . import classifier
-from .bedrock import ModelError
+from .model_errors import ModelError
 from .group_order import GroupOrder
 from .routers.groups import list_stored_groups
 from .utils import serialize_doc, to_object_id, utcnow

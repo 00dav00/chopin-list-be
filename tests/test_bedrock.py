@@ -6,8 +6,9 @@ from botocore.stub import ANY, Stubber
 from pydantic import SecretStr
 
 from app import bedrock
-from app.bedrock import ModelError, ModelUnavailable, converse
+from app.bedrock import converse
 from app.config import settings
+from app.model_errors import ModelError, ModelUnavailable
 
 REAL_CREATE_CLIENT = bedrock._create_client
 

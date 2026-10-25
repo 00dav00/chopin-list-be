@@ -11,6 +11,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import settings
+from .model_errors import ModelError, ModelUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +19,6 @@ logger = logging.getLogger(__name__)
 CONNECT_TIMEOUT_SECONDS = 3
 READ_TIMEOUT_SECONDS = 20
 CALL_TIMEOUT_SECONDS = 25.0
-
-
-class ModelError(Exception):
-    """The model could not be reached or gave nothing usable."""
-
-
-class ModelUnavailable(ModelError):
-    """The model is not configured (missing credentials)."""
 
 
 _client = None
