@@ -51,6 +51,31 @@ Brevo gotchas, each found the hard way:
 - Brevo rewrites the envelope sender to a `brevosend.com` address unless the
   sender's domain is authenticated (DKIM/DMARC) in Brevo.
 
+### Group by kind
+
+"Group by kind" asks a language model to sort items into the admin-managed
+groups. `MODEL_PROVIDER` chooses which one answers, and has no default:
+
+- `bedrock` — Mistral Large 3 on Amazon Bedrock, configured with
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally
+  `BEDROCK_MODEL_ID` and `BEDROCK_REGION`.
+- `mistral` — Mistral's own API, configured with `MISTRAL_API_KEY`, and
+  optionally `MISTRAL_MODEL` (defaults to `mistral-large-2512`, the same model).
+
+Each provider reads only its own credentials. If `MODEL_PROVIDER` is missing,
+blank or unknown, or the chosen provider's credentials are missing, grouping
+answers "try again" (HTTP 503) and the app logs why. `docker compose up`
+blanks both providers' keys, so a laptop never calls a real model. To group
+with Mistral locally, put `MISTRAL_API_KEY` in `.env` and add the opt-in file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+  -f docker-compose.mistral.yml up
+```
+
+To try the model without the app, `python -m app.tasks classify-items` sends
+sample items (or your own) with the stored groups and prints where each lands.
+
 ### Trying it locally
 
 `docker compose up` starts [Mailpit](https://mailpit.axllent.org/), a fake

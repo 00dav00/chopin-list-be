@@ -31,6 +31,9 @@ for _aws_var in (
     "AWS_PROFILE",
 ):
     os.environ.pop(_aws_var, None)
+# And for Mistral; with no provider chosen, grouping stays off unless a test opts in.
+os.environ.pop("MISTRAL_API_KEY", None)
+os.environ.pop("MODEL_PROVIDER", None)
 
 from app.auth import get_current_user  # noqa: E402
 from app.db import get_db  # noqa: E402
@@ -175,6 +178,35 @@ def brevo_api(monkeypatch):
     async def handle(transport, request):
         fake.requests.append(request)
         return fake.respond(request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle)
+    return fake
+
+
+class FakeMistral:
+    """Stands in for Mistral's API: records requests, answers with `respond`."""
+
+    def __init__(self):
+        self.requests: list[httpx.Request] = []
+        self.respond = lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"role": "assistant", "content": "answer"}}]}
+        )
+
+    def payload(self, index: int = 0) -> dict:
+        return json.loads(self.requests[index].content)
+
+
+@pytest.fixture
+def mistral_api(monkeypatch):
+    """Opt in to outbound HTTP, answered by a FakeMistral instead of the network."""
+    fake = FakeMistral()
+
+    async def handle(transport, request):
+        fake.requests.append(request)
+        response = fake.respond(request)
+        if asyncio.iscoroutine(response):
+            response = await response
+        return response
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle)
     return fake

@@ -1,3 +1,4 @@
+import logging
 import time
 
 import boto3
@@ -6,7 +7,8 @@ from botocore.stub import ANY, Stubber
 from pydantic import SecretStr
 
 from app import bedrock
-from app.bedrock import ModelError, ModelUnavailable, converse
+from app.bedrock import converse
+from app.model_errors import ModelError, ModelUnavailable
 from app.config import settings
 
 REAL_CREATE_CLIENT = bedrock._create_client
@@ -116,14 +118,19 @@ async def test_slow_model_call_times_out(credentials, monkeypatch):
     ("key_id", "secret"),
     [(None, None), ("", SecretStr("")), ("  ", SecretStr("secret")), ("key", None)],
 )
-async def test_missing_or_blank_credentials_raise_unavailable(monkeypatch, key_id, secret):
+async def test_missing_or_blank_credentials_raise_unavailable(
+    monkeypatch, caplog, key_id, secret
+):
     monkeypatch.setattr(settings, "aws_access_key_id", key_id)
     monkeypatch.setattr(settings, "aws_secret_access_key", secret)
 
     # The autouse guard fails if a client is created, so reaching it would show
     # up as an AssertionError rather than ModelUnavailable.
-    with pytest.raises(ModelUnavailable):
-        await _call()
+    with caplog.at_level(logging.ERROR, logger="app.bedrock"):
+        with pytest.raises(ModelUnavailable):
+            await _call()
+
+    assert "Bedrock is unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

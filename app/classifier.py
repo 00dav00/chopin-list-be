@@ -1,6 +1,6 @@
 """Assigns shopping items to admin-managed groups with a language model.
 
-Builds the prompt and parses the answer; app/bedrock.py makes the call. Callers
+Builds the prompt and parses the answer; app/model.py makes the call. Callers
 get each item name mapped to its group name ("Other" included), or ModelError.
 """
 
@@ -8,8 +8,8 @@ import json
 import logging
 import unicodedata
 
-from . import bedrock
-from .bedrock import ModelError
+from . import model
+from .model_errors import ModelError
 from .routers.groups import OTHER_GROUP_NAME
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ async def classify(item_names: list[str], group_names: list[str]) -> dict[str, s
     """Each item name mapped to its group name ("Other" included), or ModelError."""
     if not item_names:
         return {}
-    text = await bedrock.converse(
+    text = await model.converse(
         SYSTEM_PROMPT,
         build_payload(item_names, group_names),
         max_tokens=MAX_OUTPUT_TOKENS,

@@ -1,0 +1,9 @@
+# Opt-in "Group by kind" through Mistral's own API (each tap is a paid call):
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml \
+#     -f docker-compose.mistral.yml up
+# Needs MISTRAL_API_KEY in .env; MODEL_PROVIDER is set here so .env can't disagree.
+services:
+  api:
+    environment:
+      MODEL_PROVIDER: mistral
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
