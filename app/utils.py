@@ -10,6 +10,15 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def is_header_safe(value: str) -> bool:
+    """True when every character is printable ASCII, so the value can go in an HTTP header.
+
+    A control character reaches h11, which quotes the header value in its
+    exception -- and that gets logged, credential included.
+    """
+    return all("!" <= char <= "~" for char in value)
+
+
 def to_object_id(value: str, name: str) -> ObjectId:
     try:
         return ObjectId(value)

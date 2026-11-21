@@ -17,6 +17,7 @@ import aiosmtplib
 import httpx
 
 from .config import settings
+from .utils import is_header_safe
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +137,6 @@ def _brevo_api_key() -> Optional[str]:
     return key or None
 
 
-def _is_valid_api_key(key: str) -> bool:
-    # Printable ASCII only. A control character inside the key reaches h11,
-    # which quotes the header value in its exception -- and that gets logged.
-    return all("!" <= char <= "~" for char in key)
-
-
 def _missing_config(transport: str) -> list[str]:
     """Names of the settings the chosen transport needs to send, that are absent.
 
@@ -257,7 +252,7 @@ async def _deliver_api(
     Accepted is not delivered: Brevo answers 201 for an unverified sender and
     drops the mail afterwards, visible only in its own logs.
     """
-    if not _is_valid_api_key(api_key):
+    if not is_header_safe(api_key):
         logger.error(
             "Admin notification NOT sent: BREVO_API_KEY contains spaces, control "
             "or non-ASCII characters. Re-paste it; the value is not logged."

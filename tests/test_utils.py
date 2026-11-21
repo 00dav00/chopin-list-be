@@ -4,7 +4,7 @@ import pytest
 from bson import ObjectId
 from fastapi import HTTPException
 
-from app.utils import mark_list_touched, serialize_doc, to_object_id, utcnow
+from app.utils import is_header_safe, mark_list_touched, serialize_doc, to_object_id, utcnow
 
 
 def test_utcnow_is_timezone_aware():
@@ -65,3 +65,15 @@ async def test_mark_list_touched_scoped_by_user_id(client, db):
     await mark_list_touched(db, listing["id"], "other-user", target)
     post = await db.lists.find_one({"_id": ObjectId(listing["id"])})
     assert post["updated_at"] == pre["updated_at"]
+
+
+@pytest.mark.parametrize("value", ["xkeysib-abc123", "A~!z0"])
+def test_is_header_safe_accepts_printable_ascii(value):
+    assert is_header_safe(value)
+
+
+@pytest.mark.parametrize(
+    "value", ["two words", "nbsp inside", "curly“quote", "nul\x00", "tab\tinside"]
+)
+def test_is_header_safe_rejects_spaces_control_and_non_ascii(value):
+    assert not is_header_safe(value)

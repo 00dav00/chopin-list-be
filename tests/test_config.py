@@ -75,3 +75,36 @@ def test_bedrock_model_and_region_default_when_absent(monkeypatch):
 
     assert loaded.bedrock_model_id == "mistral.mistral-large-3-675b-instruct"
     assert loaded.bedrock_region == "eu-west-2"
+
+
+def test_model_provider_is_read_from_its_env_name(monkeypatch):
+    monkeypatch.setenv("MODEL_PROVIDER", "provider-sentinel")
+
+    assert Settings().model_provider == "provider-sentinel"
+
+
+def test_model_provider_has_no_default(monkeypatch):
+    monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+
+    assert Settings().model_provider is None
+
+
+def test_mistral_settings_are_read_from_their_env_names(monkeypatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-key-sentinel")
+    monkeypatch.setenv("MISTRAL_MODEL", "model-sentinel")
+
+    loaded = Settings()
+
+    assert loaded.mistral_api_key.get_secret_value() == "mistral-key-sentinel"
+    assert loaded.mistral_model == "model-sentinel"
+    assert "mistral-key-sentinel" not in repr(loaded)
+
+
+def test_mistral_key_absent_is_none_and_model_defaults(monkeypatch):
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.delenv("MISTRAL_MODEL", raising=False)
+
+    loaded = Settings()
+
+    assert loaded.mistral_api_key is None
+    assert loaded.mistral_model == "mistral-large-2512"
